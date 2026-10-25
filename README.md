@@ -4,7 +4,7 @@
 >
 > 不调云端 API，不用你的 token，截图和文字都不出本机。
 
-![运行截图](docs/预览-视觉版运行.png)
+![运行截图](docs/preview-running.png)
 
 ---
 
@@ -52,9 +52,9 @@
 
 外加一个「随便来一个」。三级菜单（特效 → 动物环绕）也照常工作。
 
-![右键菜单](docs/预览-右键菜单.png)
+![右键菜单](docs/preview-context-menu.png)
 
-![分组动作](docs/预览-分组动作.png)
+![分组动作](docs/preview-groups.png)
 
 ### 2. 106 个动作全部会自己播（这是 v1.2 的重点）
 
@@ -310,7 +310,7 @@ patch/
 docs/
   功能与轮询规则.md            所有功能的触发条件、三个定时器、自播权重算法
   实现细节与踩坑.md            改的时候踩过的坑、编译部署细节
-  预览-*.png                 截图
+  preview-*.png                 截图
 tools/
   _mkpatch.py                重新生成补丁（维护者用，逐文件比对上游）
   _verify_patch.py           验证补丁能否干净应用到上游 v1.0.1
