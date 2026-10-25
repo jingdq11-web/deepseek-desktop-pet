@@ -23,9 +23,35 @@ https://github.com/Bai-Cute/big-blue-fish-desktop-pet ），
   * 新增番茄钟、久坐提醒、生日、剪贴板联动、工作识别
   * 放宽 CompanionAnimationPolicy.Load() 的 106 条硬校验
   * 移除日记功能
-  * 新增文件：CompanionActionMenu.cs、CompanionDaily.cs、CompanionDailyMenu.cs、
-    CompanionVitals.cs、CompanionVitalsHud.cs、CompanionWorkContext.cs、
-    CompanionHousekeeping.cs、CompanionMenuStyles.xaml
+  * 修改 CompanionMenuStyles.xaml（MenuItem 模板补 PART_Popup，否则三级菜单展不开）
+
+补丁共涉及 20 个文件：新增 7 个、修改 13 个。
+
+新增文件：
+
+    Companion/CompanionActionMenu.cs
+    Companion/CompanionDaily.cs
+    Companion/CompanionDailyMenu.cs
+    Companion/CompanionHousekeeping.cs
+    Companion/CompanionVitals.cs
+    Companion/CompanionVitalsHud.cs
+    Companion/CompanionWorkContext.cs
+
+修改文件：
+
+    Companion/CompanionAnimationPolicy.cs
+    Companion/CompanionAnimations.cs
+    Companion/CompanionBrain.cs
+    Companion/CompanionDialogue.cs
+    Companion/CompanionEdgeLayout.cs
+    Companion/CompanionMcp.cs
+    Companion/CompanionMenuDismissal.cs
+    Companion/CompanionMenus.cs
+    Companion/CompanionMenuStyles.xaml
+    Companion/CompanionNative.cs
+    Companion/CompanionPreferences.cs
+    Companion/CompanionSettings.cs
+    Companion/CompanionWindow.cs
 
 ===============================================================================
 不包含的内容

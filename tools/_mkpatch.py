@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
-"""按文件从 GitHub 取 v1.0.1 原版，和本地工作副本比对，生成补丁。"""
+"""按文件从 GitHub 取 v1.0.1 原版，和本地工作副本比对，生成补丁。
+
+仅供维护者使用：需要一个已打好补丁的源码工作副本（SRC 指向它）。
+普通用户不需要跑这个，直接用 patch/ 里现成的补丁即可。
+"""
 import difflib
 import os
 import subprocess

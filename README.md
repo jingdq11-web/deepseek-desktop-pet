@@ -312,11 +312,15 @@ docs/
   实现细节与踩坑.md            改的时候踩过的坑、编译部署细节
   预览-*.png                 截图
 tools/
-  _mkpatch.py                重新生成补丁（逐文件比对上游）
+  _mkpatch.py                重新生成补丁（维护者用，逐文件比对上游）
+  _verify_patch.py           验证补丁能否干净应用到上游 v1.0.1
   _extras_test.py            日常功能回归
   _feed_autoplay_test.py     投喂增量 + 自播采样
   _vision_test2.py           视觉模式验证
 ```
+
+补丁本身已经用 `tools/_verify_patch.py` 验证过：从上游 `v1.0.1` 拉取 13 个被修改文件的原文，
+`git apply --check` 对 20 个文件全部通过（退出码 0）。
 
 **想搞清楚"她什么时候会动"** → 看 [`docs/功能与轮询规则.md`](docs/功能与轮询规则.md)，
 里面写了三个定时器（40ms 主循环 / 1 秒日常总闸 / 动画边界事件驱动）和每项功能的触发条件。
