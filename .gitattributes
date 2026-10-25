@@ -1,0 +1,26 @@
+# 补丁文件必须保持 LF，否则 git apply 会失败
+*.patch text eol=lf
+
+# 源码
+*.cs    text eol=lf
+*.xaml  text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.json  text eol=lf
+*.py    text eol=lf
+
+# 文档
+*.md    text eol=lf
+LICENSE text eol=lf
+NOTICE  text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.gif binary
+*.gguf binary
+*.webm binary
+*.dll binary
+*.exe binary

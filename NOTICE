@@ -1,0 +1,49 @@
+蓝色大肥鱼 · 聚合版
+Copyright 2026 jingdq11-web
+
+本产品包含由 Bai-Cute 开发的软件（"蓝色大肥鱼桌面宠物"，
+https://github.com/Bai-Cute/big-blue-fish-desktop-pet ），
+以 Apache License 2.0 授权。
+
+===============================================================================
+修改声明（Apache License 2.0, Section 4(b)）
+===============================================================================
+
+本仓库不是上游项目的完整副本，而是**一组修改**，以补丁形式分发：
+
+  patch/右键动作菜单.patch    基于上游 tag v1.0.1 生成的 unified diff
+
+主要修改内容（完整清单见 CHANGELOG.md）：
+
+  * 新增「让她做点事」/「鱼鱼的日常」两个右键菜单，把 106 个动作分成 10 组
+  * 新增全动作自播池（CompanionAnimations.ChooseAutoAction / AutoWeight）
+  * 新增好感 / 饱食 / 精力三个养成数值与右上角仪表（CompanionVitalsHud.cs）
+  * 新增看屏幕汇报，替代原来的「读字到剪贴板」
+  * 视觉模式启动参数加入 --no-mmproj-offload 与 --image-max-tokens 256
+  * 新增番茄钟、久坐提醒、生日、剪贴板联动、工作识别
+  * 放宽 CompanionAnimationPolicy.Load() 的 106 条硬校验
+  * 移除日记功能
+  * 新增文件：CompanionActionMenu.cs、CompanionDaily.cs、CompanionDailyMenu.cs、
+    CompanionVitals.cs、CompanionVitalsHud.cs、CompanionWorkContext.cs、
+    CompanionHousekeeping.cs、CompanionMenuStyles.xaml
+
+===============================================================================
+不包含的内容
+===============================================================================
+
+本仓库**不包含**上游的以下内容，请自行从上游项目获取：
+
+  * 源代码（请用补丁作用于上游 v1.0.1 源码）
+  * 动画素材 assets/fish/*.webm（约 52 MB）
+  * 桌宠形象、美术资源、人格设定
+
+上游的版权、专利、商标、人格设定与美术资源权利均归原作者 Bai-Cute 所有。
+本项目与原作者无隶属关系，不代表原作者立场。
+
+===============================================================================
+第三方组件
+===============================================================================
+
+  * llama.cpp（MIT License）—— 本地推理
+  * Qwen3.5-4B GGUF 权重 —— 见其模型页面的许可条款
+  * .NET 10 / WPF —— MIT License

@@ -1,0 +1,37 @@
+# 构建产物
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# 本地模型与素材（体积大，从上游获取）
+models/
+assets/
+*.gguf
+*.webm
+
+# 运行期文件
+preferences.json
+preferences.json.bak
+companion-errors.log
+companion-errors.log.old
+companion-extras-errors.log
+ready.status
+companion.lock
+cache/
+
+# 测试与诊断
+test-mode.flag
+test-command.txt
+test-status.json
+auto-sample.json
+vision-status.json
+vision-input.jpg
+ocr-status.json
+model-request.json
+
+# 系统
+Thumbs.db
+.DS_Store
+desktop.ini

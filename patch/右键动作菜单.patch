@@ -1,0 +1,2102 @@
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionActionMenu.cs b/code/BigBlueFish.Windows/Companion/CompanionActionMenu.cs
+--- /dev/null
++++ b/code/BigBlueFish.Windows/Companion/CompanionActionMenu.cs
+@@ -0,0 +1,156 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using System.Windows;
++using System.Windows.Controls;
++using System.Windows.Media;
++
++namespace BigBlueFish.Windows;
++
++// 右键菜单扩展：让她做点事。
++//
++// 分组策略：先看 animations.json 里的官方元数据（Meal / Festival / WorkKind / Pool），
++// 这些是作者亲手标的，最准；剩下没标的再按动作名的关键词归堆。
++// 所以作者以后加新动作，只要文件名语义正常，就会自动落进合适的组，
++// 万一哪个都不匹配，也只是掉进「其他动作」，不会丢。
++public partial class MainWindow
++{
++    // 菜单在构造期就要建好，那时 animationPolicy 还没加载，所以这里单独持有一份。
++    private CompanionAnimationPolicy? menuActionPolicy;
++
++    // 关键词兜底：从上往下，第一个命中的算数。顺序有意义（"偷吃零食"要先被"吃"抓住）。
++    private static readonly (string Name, string[] Keywords)[] KeywordGroups =
++    {
++        ("吃点什么", new[] { "吃" }),
++        ("过节", new[] { "孔明灯", "河灯", "茱萸", "雪人", "福字", "红包", "烟花", "赏月", "月饼", "元宵", "粽子", "年糕", "腊八", "重阳", "七夕", "圣诞", "南瓜灯" }),
++        ("干活", new[] { "工作状态", "碎碎念", "记录", "写代码", "思考" }),
++        ("才艺", new[] { "舞", "小提琴", "笛", "魔术", "魔方", "五子棋", "扑克", "演奏", "抛接" }),
++        ("玩耍", new[] { "玩", "水枪", "风筝", "秋千", "陀螺", "毽子", "木马", "气球", "拆礼物", "摇扇", "撸猫", "照镜子", "散步", "漂浮", "敲击", "跳跃", "奔跑" }),
++        ("特效", new[] { "鲸鱼", "蓝鲸", "泡泡", "生花", "鸽子", "环绕", "蝴蝶", "落叶", "螃蟹", "重力", "360", "换装", "开花", "旋转" }),
++        ("卖萌与日常", new[] { "哈欠", "伸懒腰", "幽灵", "吓", "东张西望", "呼吸", "哼歌", "小憩", "打瞌睡", "沉眠", "待机", "发呆", "可爱", "礼仪", "刷牙" }),
++    };
++
++    private static string MenuGroupOf(CompanionAnimationRule rule)
++    {
++        if (rule.Pool == "Disabled") return "已停用";
++        if (rule.Meal != null) return "吃点什么";
++        if (rule.Festival != null) return "过节";
++        if (rule.WorkKind != null) return "干活";
++        if (rule.Pool is "Click" or "Drag") return "互动反馈";
++        foreach (var group in KeywordGroups)
++            if (group.Keywords.Any(k => rule.Id.Contains(k, StringComparison.Ordinal)))
++                return group.Name;
++        return "其他动作";
++    }
++
++    private void AppendActionMenu(ContextMenu menu)
++    {
++        CompanionAnimationPolicy policy;
++        try
++        {
++            // 构造阶段 animationPolicy 为 null，自己读一次；读不到就安静地不挂这个菜单，
++            // 不能因为一个扩展菜单把整个桌宠搞挂。
++            policy = animationPolicy ?? CompanionAnimationPolicy.Load(AnimationDirectory);
++        }
++        catch (Exception)
++        {
++            return;
++        }
++
++        menuActionPolicy = policy;
++
++        // 子菜单项住在 Popup 里，隐式样式不一定能继承过去，显式套一遍最保险。
++        var itemStyle = menu.TryFindResource(typeof(MenuItem)) as Style;
++        MenuItem NewItem(string header)
++        {
++            var item = new MenuItem { Header = header };
++            if (itemStyle != null) item.Style = itemStyle;
++            return item;
++        }
++
++        var root = NewItem("让她做点事");
++        root.Icon = MenuGlyph("\uE768");
++
++        var random = NewItem("随便来一个");
++        random.Click += (_, _) =>
++        {
++            menu.IsOpen = false;
++            PlayActionFromMenu(PickRandomAction());
++        };
++        root.Items.Add(random);
++        root.Items.Add(new Separator());
++
++        // 按固定顺序出组，保证每次右键位置稳定，肌肉记忆不会乱。
++        string[] order = { "吃点什么", "过节", "干活", "才艺", "玩耍", "特效", "卖萌与日常", "互动反馈", "其他动作", "已停用" };
++        var buckets = new Dictionary<string, List<CompanionAnimationRule>>();
++        foreach (var rule in policy.Rules)
++        {
++            var key = MenuGroupOf(rule);
++            if (!buckets.TryGetValue(key, out var list)) buckets[key] = list = new();
++            list.Add(rule);
++        }
++
++        foreach (var name in order)
++        {
++            if (!buckets.TryGetValue(name, out var rules) || rules.Count == 0) continue;
++            var disabled = name == "已停用";
++            var sub = NewItem(name + "（" + rules.Count + "）");
++            foreach (var rule in rules)
++            {
++                var id = rule.Id;
++                var item = NewItem(id);
++                if (disabled) item.IsEnabled = false;
++                item.Click += (_, _) =>
++                {
++                    menu.IsOpen = false;
++                    PlayActionFromMenu(id);
++                };
++                sub.Items.Add(item);
++            }
++            root.Items.Add(sub);
++        }
++
++        menu.Items.Add(new Separator());
++        menu.Items.Add(root);
++
++        menu.Opened += (_, _) => root.IsEnabled = companionReady && !companionClosed;
++    }
++
++    private string PickRandomAction()
++    {
++        var policy = menuActionPolicy;
++        if (policy == null) return "待机呼吸休闲";
++        var pool = policy.Rules.Where(r => r.Pool != "Disabled").ToList();
++        if (pool.Count == 0) return "待机呼吸休闲";
++        return pool[Random.Shared.Next(pool.Count)].Id;
++    }
++
++    // 和 MCP 的 interrupt_action 走同一条路：清空待播队列、取消移动安排，立刻播。
++    private void PlayActionFromMenu(string id)
++    {
++        if (!companionReady || companionClosed) return;
++        var rule = (animationPolicy ?? menuActionPolicy)?.Rules.FirstOrDefault(r => r.Id == id);
++        if (rule == null) return;
++        if (hiddenByUser) RestoreCompanion();
++        if (PuppetActive)
++        {
++            ShowCompanionNotice("主人，现在是提线木偶模式，动作由外部接管啦～");
++            return;
++        }
++        mcpActions.Clear();
++        CancelMovement();
++        PlayAnimation(rule, "External");
++        // 从「吃点什么」里点某道菜 = 她真的吃下去了：动作播你点的那一个，数值照投喂算。
++        if (MenuGroupOf(rule) == "吃点什么") ApplyMealVitals();
++        else GrantActionAffection(rule.Id);
++    }
++
++    private static TextBlock MenuGlyph(string glyph) => new()
++    {
++        Text = glyph,
++        FontFamily = new FontFamily("Segoe MDL2 Assets"),
++        FontSize = 16,
++        Foreground = new SolidColorBrush(Color.FromRgb(80, 96, 152)),
++        VerticalAlignment = VerticalAlignment.Center
++    };
++}
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionAnimationPolicy.cs b/code/BigBlueFish.Windows/Companion/CompanionAnimationPolicy.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionAnimationPolicy.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionAnimationPolicy.cs
+@@ -44,8 +44,14 @@
+     {
+         var rules = JsonSerializer.Deserialize<List<CompanionAnimationRule>>(File.ReadAllText(Path.Combine(directory, "animations.json")))
+             ?? throw new InvalidDataException("动画规则为空");
+-        if (rules.Count != 106 || rules.Select(r => r.Id).Distinct().Count() != rules.Count)
+-            throw new InvalidDataException("动画规则不完整或有重复");
++        // 原来这里硬校验「必须正好 106 条」，导致用户往 assets/fish 里加自己的动作后
++        // 整个桌宠起不来。现在只要求：不为空、动作名不重复、内置动作还在。
++        // 新加的动作只要写进 animations.json，就会自动出现在右键菜单的分组里。
++        if (rules.Count == 0 || rules.Select(r => r.Id).Distinct().Count() != rules.Count)
++            throw new InvalidDataException("动画规则为空或有重复的动作名");
++        foreach (var required in new[] { "待机呼吸休闲", "女仆屈膝礼仪", "晨间刷牙" })
++            if (!rules.Any(r => r.Id == required))
++                throw new InvalidDataException("动画规则缺少内置动作：" + required);
+         foreach (var rule in rules)
+             if (Path.GetFileName(rule.File) != rule.File || !File.Exists(Path.Combine(directory, rule.File)))
+                 throw new FileNotFoundException("动画素材缺失", rule.File);
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionAnimations.cs b/code/BigBlueFish.Windows/Companion/CompanionAnimations.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionAnimations.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionAnimations.cs
+@@ -1,6 +1,8 @@
+ using System;
++using System.Collections.Generic;
+ using System.ComponentModel;
+ using System.IO;
++using System.Linq;
+ using System.Windows;
+ using System.Windows.Controls;
+ using System.Windows.Media;
+@@ -63,9 +65,20 @@
+         else { PlayAnimation(animationPolicy.Find("女仆屈膝礼仪"), "Startup"); ShowGreetingNotice(WelcomeText(DateTime.Now)); }
+         File.WriteAllText("ready.status", "ready");
+     }
+-    private CompanionAnimationContext AnimationContext() => new(DateTime.Now,
+-        WorkRecognitionEnabled: false, BreakfastHour: preferences.BreakfastHour,
+-        LunchHour: preferences.LunchHour, DinnerHour: preferences.DinnerHour);
++    private CompanionAnimationContext AnimationContext()
++    {
++        // 前台是 IDE / 办公软件时，动作池里 WorkKind 匹配的那些会获得更高权重。
++        bool coding = false, working = false;
++        if (preferences.WorkRecognition)
++            (coding, working) = CompanionWorkContext.Classify(CompanionNative.GetForegroundWindow());
++        return new(DateTime.Now,
++            WorkRecognitionEnabled: preferences.WorkRecognition,
++            IsWorking: working,
++            IsCoding: coding,
++            BreakfastHour: preferences.BreakfastHour,
++            LunchHour: preferences.LunchHour,
++            DinnerHour: preferences.DinnerHour);
++    }
+     private void PlayAnimation(CompanionAnimationRule rule, string phase, bool mirror = false)
+     {
+         if (!companionReady || companionClosed) return;
+@@ -77,6 +90,66 @@
+             playbackRate: rule.Pool == "Greeting" ? 1.5 : 1);
+     }
+     private void PlayIdle() => PlayAnimation(animationPolicy.Choose("Idle", AnimationContext(), companionRandom), "Idle");
++
++    // —————————————— 自播动作池 ——————————————
++    //
++    // 原版只有 Pool=Event 的 91 个动作会被自动播：点击反馈 5 个、拖拽 1 个永远只在你
++    // 动手时出现；再加上「只有夜里 / 只有某个季节 / 只有节日前后 / 只在整点前后」这些
++    // 约束会把权重压成 0，实际一天能看到的就更少。
++    // 现在改成「除已停用和拖拽之外，全部都能自己播」：
++    //   · 被时间/季节/节日约束掉的动作给一个保底权重，偶尔出现而不是永远不出现
++    //   · 点击反馈、待机、请安/刷牙这些按池子降权，不会喧宾夺主
++    //   · 最近 8 个播过的降权，避免老是那几下
++    private const double AutoFloorWeight = 25;
++    private const int AutoRecentMemory = 8;
++    private readonly Queue<string> recentAutoActions = new();
++    private string lastAutoActionId = "";
++
++    private CompanionAnimationRule ChooseAutoAction(CompanionAnimationContext context)
++    {
++        if (!preferences.AutoPlayAllActions)
++            return animationPolicy.Choose("Event", context, companionRandom);
++
++        var candidates = animationPolicy.Rules
++            .Where(r => r.Pool != "Disabled" && r.Pool != "Drag")
++            .Select(r => (Rule: r, Weight: AutoWeight(r, context)))
++            .Where(x => x.Weight > 0)
++            .ToArray();
++        if (candidates.Length == 0)
++            return animationPolicy.Choose("Event", context, companionRandom);
++
++        var point = companionRandom.NextDouble() * candidates.Sum(x => x.Weight);
++        var picked = candidates[^1].Rule;
++        foreach (var entry in candidates)
++        {
++            point -= entry.Weight;
++            if (point < 0) { picked = entry.Rule; break; }
++        }
++        lastAutoActionId = picked.Id;
++        recentAutoActions.Enqueue(picked.Id);
++        while (recentAutoActions.Count > AutoRecentMemory) recentAutoActions.Dequeue();
++        return picked;
++    }
++
++    private double AutoWeight(CompanionAnimationRule rule, CompanionAnimationContext context)
++    {
++        var raw = animationPolicy.Weight(rule, context);
++        // 作者在 animations.json 里给的权重跨度是 0~1000（50 倍），直接拿去做轮盘，
++        // 权重 20/30 的动作几乎永远抽不到（0.2% 意味着几小时才轮到一次）。
++        // 这里压成 0.35 次方，跨度收敛到 4~5 倍：常见动作还是更常见，但没有动作会被饿死。
++        var weight = Math.Pow(raw > 0 ? raw : AutoFloorWeight, .35) * 15;
++        weight *= rule.Pool switch
++        {
++            "Click" => .60,                                          // 点击反馈也会自己播，比正常动作少一半
++            "Idle" => .60,
++            "Greeting" or "Daily" => .30,                            // 请安/刷牙有专门时机，别乱插
++            _ => 1.0
++        };
++        if (rule.Id == lastAutoActionId) weight *= .05;              // 别连着播同一个
++        else if (recentAutoActions.Contains(rule.Id)) weight *= .30; // 最近播过的降权
++        return weight;
++    }
++
+     private void AnimationFinished()
+     {
+         if (companionClosed) return;
+@@ -117,11 +190,11 @@
+             PlayAnimation(animationPolicy.Find("晨间刷牙"), "Daily");
+             return;
+         }
++        if (TryVitalsAnimation()) return;
+         if (DateTime.UtcNow >= nextAction)
+         {
+             nextAction = DateTime.UtcNow.AddSeconds(preferences.AnimationIntervalSeconds);
+-            var rule = animationPolicy.Choose("Event", AnimationContext(), companionRandom);
+-            StartAnimationEvent(rule);
++            StartAnimationEvent(ChooseAutoAction(AnimationContext()));
+             return;
+         }
+         PlayIdle();
+@@ -153,6 +226,7 @@
+     {
+         if (PuppetActive || !companionReady || exitAnimation) return;
+         CancelMovement();
++        PetCompanion();
+         PlayAnimation(animationPolicy.Choose("Click", AnimationContext(), companionRandom), "Click");
+     }
+     private void FinishDragAnimation()
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionBrain.cs b/code/BigBlueFish.Windows/Companion/CompanionBrain.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionBrain.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionBrain.cs
+@@ -39,6 +39,9 @@
+     private readonly Func<double> newsRoll;
+     private string lastNewsTitle = "";
+     internal string Status { get; private set; } = "等待说话时启动";
++
++    // 由主窗口每秒同步一次。好感度只影响语气（越亲近越撒娇），不影响事实判断。
++    internal double Affection { get; set; } = 50;
+     internal bool Busy { get; private set; }
+     internal bool UseGpu { get; set; } = true;
+     internal bool StopOnBattery { get; set; } = true;
+@@ -279,8 +282,11 @@
+         {
+             arguments.Add("--mmproj");
+             arguments.Add(Path.GetFullPath("models/Qwen3.5-4B-heretic.mmproj-f16.gguf"));
++            // 8G 显存放不下视觉编码器的计算图（约 4.8G），会直接 OOM 崩掉。
++            // 编码器留在 CPU，语言模型照旧上 GPU：单张 768px 截图多花 2～3 秒，但不会崩。
++            arguments.Add("--no-mmproj-offload");
+             arguments.Add("--image-max-tokens");
+-            arguments.Add("512");
++            arguments.Add("256");
+         }
+         foreach (var arg in arguments)
+             psi.ArgumentList.Add(arg);
+@@ -421,6 +427,73 @@
+         }
+     }
+ 
++    // 通用入口：给剪贴板联动、日记这类功能用，人设和请求都由调用方给。
++    internal async Task<string> GenerateCustom(string persona, string request, double temperature = .5)
++    {
++        if (Busy || !CanRunOnCurrentPower) return "";
++        Busy = true;
++        active = new CancellationTokenSource(TimeSpan.FromSeconds(60));
++        var token = active.Token;
++        try
++        {
++            await EnsureRunner(token);
++            Status = "正在想怎么说";
++            var text = await Complete(persona, request, temperature, token);
++            Status = ReadyStatus("本地模型就绪");
++            return CanRunOnCurrentPower ? text : "";
++        }
++        catch (OperationCanceledException) { return ""; }
++        catch (Exception e)
++        {
++            Status = e is IOException ? e.Message : "暂时想不出来";
++            return "";
++        }
++        finally
++        {
++            Busy = false;
++            active?.Dispose();
++            active = null;
++            if (!CanRunOnCurrentPower) StopRunner();
++        }
++    }
++
++    // 右键「看看主人在干什么」：看画面 + 说出主人在做什么 + 她自己的感想。
++    // 视觉版传图，OCR 版传识别出的文字，两种构建都能编。
++    internal async Task<string> GenerateScreenReportAsync(CompanionWindowImage? image, string? screenText)
++    {
++        if (Busy || !CanRunOnCurrentPower) return "";
++        if (image == null && string.IsNullOrWhiteSpace(screenText)) return "";
++        Busy = true;
++        active = new CancellationTokenSource(TimeSpan.FromSeconds(90));
++        var token = active.Token;
++        try
++        {
++            await EnsureRunner(token);
++            Status = "正在看主人在忙什么";
++            var persona = CompanionDialogue.ScreenReportPersona + CompanionDialogue.IntimacyHint(Affection);
++            var request = $"现在是{DateTime.Now:HH:mm}。" +
++                (string.IsNullOrWhiteSpace(screenText)
++                    ? "看这张屏幕截图，说说主人在干什么，再说你的想法。"
++                    : "屏幕上的文字如下，说说主人在干什么，再说你的想法：\n" + screenText);
++            var text = await Complete(persona, request, .55, token, image);
++            Status = ReadyStatus("本地模型就绪");
++            return CanRunOnCurrentPower ? text : "";
++        }
++        catch (OperationCanceledException) { return ""; }
++        catch (Exception e)
++        {
++            Status = e is IOException ? e.Message : "暂时看不明白";
++            return "";
++        }
++        finally
++        {
++            Busy = false;
++            active?.Dispose();
++            active = null;
++            if (!CanRunOnCurrentPower) StopRunner();
++        }
++    }
++
+     private async Task<string> Complete(string persona, string request, double temperature, CancellationToken token, CompanionWindowImage? image = null, Action<string>? onPartial = null)
+     {
+         try
+@@ -605,9 +678,11 @@
+             runnerReadyMs = generationWatch.Elapsed.TotalMilliseconds;
+             Status = image == null ? "本地生成短句" : "正在理解当前窗口";
+ #if COMPANION_OCR
+-            var selectedPersona = news == null ? (ocr == null ? Persona : OcrPersona) : NewsPersona;
+-#else
+-            var selectedPersona = news == null ? Persona : NewsPersona;
++            var selectedPersona = (news == null ? (ocr == null ? Persona : OcrPersona) : NewsPersona)
++                + CompanionDialogue.IntimacyHint(Affection);
++#else
++            var selectedPersona = (news == null ? Persona : NewsPersona)
++                + CompanionDialogue.IntimacyHint(Affection);
+ #endif
+             var text = await Complete(selectedPersona, request, news == null ? CompanionDialogue.Temperature : .35, token, image, partial =>
+             {
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionDaily.cs b/code/BigBlueFish.Windows/Companion/CompanionDaily.cs
+--- /dev/null
++++ b/code/BigBlueFish.Windows/Companion/CompanionDaily.cs
+@@ -0,0 +1,285 @@
++using System;
++using System.Collections.Generic;
++using System.IO;
++using System.Linq;
++using System.Text;
++using System.Threading;
++using System.Threading.Tasks;
++using System.Windows;
++
++namespace BigBlueFish.Windows;
++
++// 日常功能：番茄钟、久坐提醒、日记、生日、剪贴板联动、截图取字。
++// 全部只在本机跑，不联网（剪贴板联动走本地模型）。
++public partial class MainWindow
++{
++    private DateTime extrasNextTick = DateTime.MinValue;
++    private bool extrasErrorLogged;
++
++    private DateTime? pomodoroEnd;
++    private int pomodoroMinutes;
++    private DateTime sitSince = DateTime.Now;
++
++
++    private DateTime clipboardNextAt = DateTime.MinValue;
++    private string clipboardLast = "";
++    private bool clipboardBusy;
++    private string housekeepingDate = "";
++
++    // 一秒一次的总闸，所有日常功能都从这里走，避免各自加定时器。
++    private void CompanionExtrasTick()
++    {
++        var now = DateTime.Now;
++        if (now < extrasNextTick) return;
++        extrasNextTick = now.AddSeconds(1);
++        try
++        {
++            VitalsTick();
++            PomodoroTick(now);
++            SitTick(now);
++            BirthdayTick(now);
++            HousekeepingTick(now);
++        }
++        catch (Exception e)
++        {
++            if (extrasErrorLogged) return;
++            extrasErrorLogged = true;
++            try { File.WriteAllText("companion-extras-errors.log", e.ToString()); } catch { }
++        }
++    }
++
++    // —————————————— 目录保洁 ——————————————
++
++    // 一天跑一次就够：删过期日记、滚动错误日志、清诊断文件。
++    private void HousekeepingTick(DateTime now)
++    {
++        var today = now.ToString("yyyy-MM-dd");
++        if (housekeepingDate == today) return;
++        housekeepingDate = today;
++        var summary = CompanionHousekeeping.Run(TestMode);
++        if (summary.Length > 0)
++        {
++            try { File.AppendAllText("companion-errors.log", $"{now:s} 保洁：{summary}{Environment.NewLine}"); } catch { }
++        }
++    }
++
++    // —————————————— 番茄钟 ——————————————
++
++    internal bool PomodoroRunning => pomodoroEnd != null;
++
++    internal string PomodoroLabel()
++    {
++        if (pomodoroEnd is not { } end) return "番茄钟";
++        var left = end - DateTime.Now;
++        return left <= TimeSpan.Zero ? "番茄钟（马上到）" : $"番茄钟（还剩 {(int)left.TotalMinutes + 1} 分钟）";
++    }
++
++    private void StartPomodoro(int minutes)
++    {
++        pomodoroMinutes = minutes;
++        pomodoroEnd = DateTime.Now.AddMinutes(minutes);
++        if (hiddenByUser) RestoreCompanion();
++        ShowCompanionNotice($"好！鱼鱼帮主人看着时间，{minutes} 分钟后叫你～先专心做事哦");
++    }
++
++    private void StopPomodoro()
++    {
++        if (pomodoroEnd == null) return;
++        pomodoroEnd = null;
++        ShowCompanionNotice("计时停啦，那……下次再一起加油？");
++    }
++
++    private void PomodoroTick(DateTime now)
++    {
++        if (pomodoroEnd is not { } end || now < end) return;
++        pomodoroEnd = null;
++        if (!companionReady || companionClosed) return;
++        var rule = FindAnimation("雀跃", "庆祝", "开心", "跃动", "伸懒腰");
++        if (rule != null && !PuppetActive)
++        {
++            mcpActions.Clear();
++            CancelMovement();
++            PlayAnimation(rule, "External");
++        }
++        ShowCompanionNotice($"主人，{pomodoroMinutes} 分钟到啦！站起来动一动，顺便喝口水～");
++    }
++
++    // —————————————— 久坐提醒 ——————————————
++
++    private void SitTick(DateTime now)
++    {
++        // 离开电脑两分钟以上就重新计时，不然一天下来会被提醒到烦。
++        if (CompanionNative.IdleSeconds > 120) { sitSince = now; return; }
++        if ((now - sitSince).TotalMinutes < preferences.SitLimitMinutes) return;
++        sitSince = now;
++        if (!companionReady || companionClosed || PuppetActive) return;
++        var rule = FindAnimation("伸懒腰", "哈欠", "散步", "原地漂浮");
++        if (rule != null)
++        {
++            mcpActions.Clear();
++            CancelMovement();
++            PlayAnimation(rule, "External");
++        }
++        ShowCompanionNotice($"主人已经连着坐了 {preferences.SitLimitMinutes} 分钟了，跟鱼鱼一起站起来伸个懒腰吧？");
++    }
++
++    // —————————————— 生日 ——————————————
++
++    private void BirthdayTick(DateTime now)
++    {
++        if (preferences.BirthdayMonth <= 0 || preferences.BirthdayDay <= 0) return;
++        if (now.Month != preferences.BirthdayMonth || now.Day != preferences.BirthdayDay) return;
++        if (preferences.LastBirthdayYear == now.Year) return;
++        preferences.LastBirthdayYear = now.Year;
++        SaveCompanion();
++        if (!companionReady || companionClosed) return;
++        var rule = FindAnimation("红包", "烟花", "庆祝", "雀跃", "孔明灯", "生日快乐");
++        if (rule != null && !PuppetActive)
++        {
++            mcpActions.Clear();
++            CancelMovement();
++            PlayAnimation(rule, "External");
++        }
++        ShowCompanionNotice("主人！生日快乐！！鱼鱼一直记得今天的～祝主人今年顺顺利利，想要什么都能拿到！");
++    }
++
++    // —————————————— 剪贴板联动 ——————————————
++
++    private void OnClipboardChanged()
++    {
++        if (!preferences.ClipboardWatch || clipboardBusy) return;
++        if (!companionReady || companionClosed || PuppetActive) return;
++        if (hiddenByUser || fullscreenHidden || companionSettings != null || modelInstaller != null) return;
++        if (DateTime.Now < clipboardNextAt) return;
++        string text;
++        try
++        {
++            if (!Clipboard.ContainsText()) return;
++            text = Clipboard.GetText().Trim();
++        }
++        catch { return; }
++        if (text.Length < 8 || text == clipboardLast) return;
++        clipboardLast = text;
++        var kind = CompanionClipboard.Classify(text);
++        if (kind == CompanionClipboardKind.None) return;
++        clipboardNextAt = DateTime.Now.AddSeconds(25);
++        _ = ClipboardReactAsync(kind, text);
++    }
++
++    private async Task ClipboardReactAsync(CompanionClipboardKind kind, string text)
++    {
++        if (clipboardBusy || brain.Busy || !preferences.ModelEnabled || !brain.ModelAvailable || !brain.CanRunOnCurrentPower) return;
++        clipboardBusy = true;
++        var snippet = text.Length > 1200 ? text[..1200] : text;
++        try
++        {
++            var (persona, request) = kind switch
++            {
++                CompanionClipboardKind.Code =>
++                    (CompanionDialogue.ClipboardCodePersona, "主人刚复制的代码：\n" + snippet),
++                CompanionClipboardKind.Link =>
++                    (CompanionDialogue.ClipboardLinkPersona, "主人刚复制的链接：\n" + snippet),
++                _ =>
++                    (CompanionDialogue.ClipboardTranslatePersona, "主人刚复制的外文：\n" + snippet)
++            };
++            BeginModelSpeech();
++            var reply = await brain.GenerateCustom(persona, request, .6);
++            if (reply.Length > 0 && !companionClosed && !hiddenByUser) ShowCompanionBubble(reply);
++        }
++        catch { }
++        finally
++        {
++            EndModelSpeech();
++            clipboardBusy = false;
++        }
++    }
++
++    // —————————————— 看屏幕汇报 ——————————————
++
++    // 她要做的不是抄字，是「看懂主人在干什么，再说一句自己的感想」。
++    private async Task ReportScreenAsync()
++    {
++        if (PuppetActive) return;
++        var handle = CompanionNative.ResolveSpeechForeground(
++            CompanionNative.GetForegroundWindow(), lastExternalForeground);
++        if (handle == IntPtr.Zero)
++        {
++            ShowCompanionNotice("主人先打开一个窗口，鱼鱼才看得到呀～");
++            return;
++        }
++        if (!preferences.ModelEnabled || !brain.ModelAvailable)
++        {
++            ShowCompanionNotice("鱼鱼的脑子还没准备好，等一会儿再看看？");
++            return;
++        }
++        if (hiddenByUser) RestoreCompanion();
++        ShowCompanionNotice("鱼鱼看看主人在忙什么…");
++        string report;
++#if COMPANION_OCR
++        try
++        {
++            var snapshot = await CompanionOcr.ReadAsync(handle, CancellationToken.None);
++            var text = CompanionOcrLayout.Format(snapshot.Words, snapshot.Width, snapshot.Height);
++            report = await brain.GenerateScreenReportAsync(null, text);
++        }
++        catch (Exception)
++        {
++            report = "";
++        }
++#else
++        var image = CompanionNative.ForegroundWindowImage(handle);
++        if (image == null)
++        {
++            ShowCompanionNotice("这个窗口鱼鱼看不到，换一个再试试？");
++            return;
++        }
++        report = await brain.GenerateScreenReportAsync(image, null);
++#endif
++        if (string.IsNullOrWhiteSpace(report))
++        {
++            ShowCompanionNotice("唔…鱼鱼没看明白，再试一次？");
++            return;
++        }
++        // 汇报比平时一句话长，气泡留久一点，够主人读完。
++        ShowCompanionBubble(report, 40);
++    }
++}
++
++internal enum CompanionClipboardKind { None, Code, Link, Foreign }
++
++// 剪贴板内容分类。宁可少触发，也不要让群里那种复制粘贴把它当复读机。
++internal static class CompanionClipboard
++{
++    private static readonly string[] CodeHints =
++    {
++        "function ", "def ", "class ", "import ", "public ", "private ", "const ", "let ",
++        "return ", "#include", "<?php", "</", "=>", "();", "}\n", "#!/", "SELECT ", "from "
++    };
++
++    internal static CompanionClipboardKind Classify(string text)
++    {
++        var trimmed = text.Trim();
++        if (trimmed.Length == 0) return CompanionClipboardKind.None;
++
++        bool looksLikeUrl = trimmed.Length <= 400
++            && (trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
++                || trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
++            && !trimmed.Contains('\n');
++        if (looksLikeUrl) return CompanionClipboardKind.Link;
++
++        bool hasBraces = trimmed.Contains('{') && trimmed.Contains('}');
++        bool hasHint = CodeHints.Any(h => trimmed.Contains(h, StringComparison.Ordinal));
++        if (trimmed.Contains("```") || (hasBraces && hasHint) || (hasHint && trimmed.Contains(";\n")))
++            return CompanionClipboardKind.Code;
++
++        int latin = 0, cjk = 0;
++        foreach (var c in trimmed)
++        {
++            if (c is >= 'a' and <= 'z' or >= 'A' and <= 'Z') latin++;
++            else if (c is >= '\u4E00' and <= '\u9FFF') cjk++;
++        }
++        if (latin >= 20 && cjk == 0 && latin > trimmed.Length * 0.5) return CompanionClipboardKind.Foreign;
++
++        return CompanionClipboardKind.None;
++    }
++}
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionDailyMenu.cs b/code/BigBlueFish.Windows/Companion/CompanionDailyMenu.cs
+--- /dev/null
++++ b/code/BigBlueFish.Windows/Companion/CompanionDailyMenu.cs
+@@ -0,0 +1,77 @@
++using System;
++using System.Windows;
++using System.Windows.Controls;
++
++namespace BigBlueFish.Windows;
++
++// 右键菜单里的「鱼鱼的日常」：喂食、番茄钟、看她汇报你在干什么、剪贴板开关。
++public partial class MainWindow
++{
++    private void AppendDailyMenu(ContextMenu menu)
++    {
++        var itemStyle = menu.TryFindResource(typeof(MenuItem)) as Style;
++        MenuItem NewItem(string header)
++        {
++            var item = new MenuItem { Header = header };
++            if (itemStyle != null) item.Style = itemStyle;
++            return item;
++        }
++
++        var root = NewItem("鱼鱼的日常");
++        root.Icon = MenuGlyph("\uE787");
++
++        var feed = NewItem("喂她吃点东西");
++        feed.Click += (_, _) => { menu.IsOpen = false; FeedCompanion(); };
++        root.Items.Add(feed);
++
++        var pomodoro = NewItem("番茄钟");
++        var start25 = NewItem("开始 25 分钟");
++        start25.Click += (_, _) => { menu.IsOpen = false; StartPomodoro(25); };
++        var start45 = NewItem("开始 45 分钟");
++        start45.Click += (_, _) => { menu.IsOpen = false; StartPomodoro(45); };
++        var stop = NewItem("停止计时");
++        stop.Click += (_, _) => { menu.IsOpen = false; StopPomodoro(); };
++        pomodoro.Items.Add(start25);
++        pomodoro.Items.Add(start45);
++        pomodoro.Items.Add(new Separator());
++        pomodoro.Items.Add(stop);
++        root.Items.Add(pomodoro);
++
++        // 看画面 + 说出她在干什么、她自己怎么想。不往剪贴板写东西。
++        var report = NewItem("看看主人在干什么");
++        report.Click += (_, _) => { menu.IsOpen = false; _ = ReportScreenAsync(); };
++        root.Items.Add(report);
++
++        var clipboard = NewItem("剪贴板联动");
++        clipboard.Click += (_, _) =>
++        {
++            menu.IsOpen = false;
++            preferences.ClipboardWatch = !preferences.ClipboardWatch;
++            clipboardLast = "";
++            SaveCompanion();
++            ShowCompanionNotice(preferences.ClipboardWatch
++                ? "好！主人复制东西的时候鱼鱼会偷偷看一眼～"
++                : "那鱼鱼不看剪贴板了。");
++        };
++        root.Items.Add(clipboard);
++
++        root.Items.Add(new Separator());
++        var status = NewItem("状态");
++        status.IsEnabled = false;
++        root.Items.Add(status);
++
++        // 动态文字在展开时刷新，避免菜单长期挂着旧数值。
++        root.SubmenuOpened += (_, _) =>
++        {
++            feed.IsEnabled = !PuppetActive;
++            report.IsEnabled = !PuppetActive;
++            clipboard.Header = preferences.ClipboardWatch ? "剪贴板联动：开" : "剪贴板联动：关";
++            pomodoro.Header = PomodoroRunning ? PomodoroLabel() : "番茄钟";
++            stop.IsEnabled = PomodoroRunning;
++            status.Header = VitalsSummary();
++        };
++
++        menu.Items.Add(new Separator());
++        menu.Items.Add(root);
++    }
++}
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionDialogue.cs b/code/BigBlueFish.Windows/Companion/CompanionDialogue.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionDialogue.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionDialogue.cs
+@@ -35,6 +35,28 @@
+     internal const string OcrObserverGuidance = "\n屏幕文字来自本机OCR。聊天正文是主人与别人的对话，主体正文、编辑区或聊天记录帮助理解主人在做什么。零碎的识别字词供参考；平静的桌面、空白页和入口界面同样是正常的陪伴情境。";
+     internal const string SceneGuidance = "\n你在屏幕旁陪着主人。代码、文档、聊天里的主体内容帮助理解当前活动；桌面、新标签页、主页也可以成为轻轻问候、好奇或撒娇的话题。";
+     internal const string WeatherPersona = Voice + "\n这一回给主人说说所选地点最近的天气。借着天气资料，用鱼鱼的口吻冒出一个简短小反应。只选最想说的一点，带一点关心、感受或小愿望也好。";
++    internal const string ClipboardTranslatePersona = Voice + "\n这一回主人刚复制了一段外文。直接用鱼鱼的口吻说出它的中文意思，一两句就够，不要解释自己在翻译，也不要加引号。";
++    internal const string ClipboardCodePersona = Voice + "\n这一回主人刚复制了一段代码。像凑在旁边看屏幕一样随口吐一句小反应：可以好奇、可以佩服、也可以轻轻吐槽看不懂。不要说“代码片段”这种词。";
++    internal const string ClipboardLinkPersona = Voice + "\n这一回主人刚复制了一个网页链接。从链接里的文字和域名猜猜那是什么内容，用鱼鱼的口吻好奇地问一句或说一句小感想，不要复述完整网址。";
++    internal const string ScreenTextPersona = "你是一台本地 OCR，只做抄写。把图片里看得见的文字按从上到下、从左到右的顺序原样抄出来，保留换行。不要翻译，不要总结，不要补字，看不清的地方留空。只输出文字本身。";
++
++    // 右键「看看主人在干什么」：先读懂画面，再说自己的想法。
++    internal const string ScreenReportPersona = """
++你是蓝色大肥鱼，自称鱼鱼，叫用户主人。主人让你看一眼他的屏幕。
++你要用两三句话回答两件事：第一句说主人在干什么（具体到能看出你真的看了画面：在写什么代码、看什么网页、聊什么、玩什么）；第二三句说鱼鱼自己的想法——好奇、佩服、心疼、想凑过去看看、或者劝主人歇一会儿，都可以。
++像凑在旁边探头看一样自然，不要汇报口吻，不要说"根据截图"、"我观察到"这种话，不要罗列界面元素，不要提分辨率或技术细节。
++总长控制在 90 字以内，用鱼鱼的口吻，可以带唔、咦、哇、诶。
++""";
++
++    // 好感度决定语气亲疏：只改称呼和撒娇程度，不改她本来的人格。
++    internal static string IntimacyHint(double affection) => affection switch
++    {
++        >= 85 => "\n你和主人已经非常亲了：可以黏着主人、拖长音撒娇、说一点只有很亲近才会说的话（比如想被摸头、想一起待着），称呼可以直接「主人～」。",
++        >= 60 => "\n你和主人关系很好：自然亲近，偶尔撒个小娇，语气软一点。",
++        >= 35 => "\n你和主人还在慢慢熟悉：友好、有礼貌，别太黏人，撒娇要克制。",
++        >= 15 => "\n你和主人有点生分：话少一些、客气一些，可以微微拘谨。",
++        _ => "\n你正在闹别扭：不太想搭理，回答短一点、带点小情绪，但不要刻薄骂人。"
++    };
+     internal const string NewsPersona = """
+ 你是桌面上的蓝色大肥鱼。这一回向主人播报一条科技新闻。
+ 以“主人，”开头，一小句说清谁发生了什么最重要的事，紧接一小句贴合新闻的关切或感受。整段约30–60字，最多80字。
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionEdgeLayout.cs b/code/BigBlueFish.Windows/Companion/CompanionEdgeLayout.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionEdgeLayout.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionEdgeLayout.cs
+@@ -180,7 +180,11 @@
+                 double bubbleHeight = Math.Min(Math.Max(1.0, (area.Height - 16.0) / scale), Math.Max(22, measuringText.DesiredSize.Height) + vertical);
+                 bubbleWidth *= scale;
+                 bubbleHeight *= scale;
+-                double left = Limit(pet.Left + petBounds.Left + petBounds.Width / 2.0 - bubbleWidth / 2.0, area.Left + 8.0, area.Right - bubbleWidth - 8.0);
++                double left = pet.Left + petBounds.Left + petBounds.Width / 2.0 - bubbleWidth / 2.0;
++                // 右上角挂着状态仪表，气泡整体往左让一让，免得盖住。指针位置由
++                // 下面的 PointAt 按 (中心 - left) 反算，所以让位之后尾巴仍然指着她的头。
++                left -= ((BigBlueFish.Windows.MainWindow)pet).CompanionBubbleRightInset;
++                left = Limit(left, area.Left + 8.0, area.Right - bubbleWidth - 8.0);
+                 double top = pet.Top + petBounds.Top - bubbleHeight - 10.0;
+                 bool belowPet = false;
+                 if (top < area.Top + 8.0)
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionHousekeeping.cs b/code/BigBlueFish.Windows/Companion/CompanionHousekeeping.cs
+--- /dev/null
++++ b/code/BigBlueFish.Windows/Companion/CompanionHousekeeping.cs
+@@ -0,0 +1,65 @@
++using System;
++using System.Globalization;
++using System.IO;
++
++namespace BigBlueFish.Windows;
++
++// 目录保洁：错误日志滚一份、非测试模式清掉上次留下的诊断文件。
++//
++// 为什么要做：她每次说话都会把当前窗口截一张图写进 vision-input.jpg（36 KB，
++// 内容是主人的屏幕）。磁盘占用不大，但那是屏幕截图，不该长期躺在安装目录里。
++// 另外错误日志是追加写的，不滚的话遇到循环报错能把磁盘写满。
++internal static class CompanionHousekeeping
++{
++    internal const long ErrorLogLimit = 512 * 1024;
++
++    private static readonly string[] Diagnostics =
++    {
++        "vision-input.jpg",
++        "vision-status.json",
++        "ocr-status.json",
++        "model-request.json",
++        "test-status.json",
++        "test-command.txt"
++    };
++
++    // 返回一句人话，方便写日志/气泡；没有可清的就返回空串。
++    internal static string Run(bool testMode)
++    {
++        bool rotated = RotateErrorLog();
++        int removedDiagnostics = testMode ? 0 : ClearDiagnostics();
++
++        var parts = new System.Collections.Generic.List<string>();
++        if (rotated) parts.Add("错误日志已滚动");
++        if (removedDiagnostics > 0) parts.Add($"清掉 {removedDiagnostics} 个诊断文件");
++        return string.Join("，", parts);
++    }
++
++    private static bool RotateErrorLog()
++    {
++        try
++        {
++            var log = new FileInfo("companion-errors.log");
++            if (!log.Exists || log.Length <= ErrorLogLimit) return false;
++            File.Copy("companion-errors.log", "companion-errors.log.old", true);
++            File.WriteAllText("companion-errors.log", "");
++            return true;
++        }
++        catch { return false; }
++    }
++
++    private static int ClearDiagnostics()
++    {
++        int removed = 0;
++        foreach (var name in Diagnostics)
++            try
++            {
++                if (!File.Exists(name)) continue;
++                File.Delete(name);
++                removed++;
++            }
++            catch { }
++        return removed;
++    }
++
++}
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionMcp.cs b/code/BigBlueFish.Windows/Companion/CompanionMcp.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionMcp.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionMcp.cs
+@@ -62,7 +62,7 @@
+         RefreshMcpMenuAvailability();
+         if (!enabled)
+         {
+-            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+             nextAction = DateTime.UtcNow.AddSeconds(preferences.AnimationIntervalSeconds);
+             nextWarmup = DateTime.MinValue;
+             PlayIdle();
+@@ -93,7 +93,7 @@
+     {
+         if (mcpNextSpeech == null) return false;
+         var text = mcpNextSpeech; mcpNextSpeech = null;
+-        nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++        nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+         ShowMcpSpeech(text);
+         return true;
+     }
+@@ -203,7 +203,7 @@
+         if (values.TryGetValue("Top", out var top) && top is double y) Top = y;
+         ClampCompanion(); anchor = new(Left, Top);
+         if (!preferences.HideOnFullscreen && fullscreenHidden) { fullscreenHidden = false; if (!hiddenByUser) Show(); }
+-        if (values.ContainsKey("SpeechMinMinutes")) nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++        if (values.ContainsKey("SpeechMinMinutes")) nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+         if (values.ContainsKey("AnimationIntervalSeconds")) nextAction = DateTime.UtcNow.AddSeconds(preferences.AnimationIntervalSeconds);
+         if (values.ContainsKey("BubbleDurationIndex") && bubble.Visibility == Visibility.Visible) ResetBubbleDeadline();
+         SaveCompanion();
+@@ -315,6 +315,8 @@
+         {
+             if (!McpInputAvailable || string.IsNullOrWhiteSpace(text.Text)) return;
+             PublishMcpInteraction("user_message", new { text = text.Text });
++            // 找她说话当然会涨好感（30 秒内连发只算一次）。
++            GrantChatMessageAffection();
+             text.Clear(); status.Text = "已发送给 Agent"; text.Focus();
+         }
+         var send = ModernUI.Button("发送", Send, true); send.MinWidth = 58; send.MinHeight = 0; send.Margin = new Thickness(0); send.Padding = new Thickness(12, 5, 12, 5); send.FontSize = 12;
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionMenuDismissal.cs b/code/BigBlueFish.Windows/Companion/CompanionMenuDismissal.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionMenuDismissal.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionMenuDismissal.cs
+@@ -3,6 +3,7 @@
+ using System.Runtime.InteropServices;
+ using System.Windows;
+ using System.Windows.Controls;
++using System.Windows.Controls.Primitives;
+ using System.Windows.Threading;
+ 
+ namespace BigBlueFish.Windows;
+@@ -69,7 +70,30 @@
+         if (!menu.IsOpen || PresentationSource.FromVisual(menu) == null) return;
+         var first = menu.PointToScreen(new Point(0, 0));
+         var last = menu.PointToScreen(new Point(menu.ActualWidth, menu.ActualHeight));
+-        if (!new Rect(first, last).Contains(physicalPoint)) menu.IsOpen = false;
++        if (new Rect(first, last).Contains(physicalPoint)) return;
++        // 子菜单是独立的 Popup 窗口，落在主菜单矩形之外；不把它们的范围算进来，
++        // 鼠标一按下就会把整个菜单拆掉，点击永远到不了子菜单项。
++        if (InsideOpenSubmenu(menu, physicalPoint)) return;
++        menu.IsOpen = false;
++    }
++
++    private static bool InsideOpenSubmenu(ItemsControl parent, Point physicalPoint)
++    {
++        foreach (var entry in parent.Items)
++        {
++            if (entry is not MenuItem item || !item.IsSubmenuOpen) continue;
++            if (item.Template?.FindName("PART_Popup", item) is Popup { Child: FrameworkElement child }
++                && PresentationSource.FromVisual(child) != null)
++            {
++                var first = child.PointToScreen(new Point(0, 0));
++                var last = child.PointToScreen(new Point(child.ActualWidth, child.ActualHeight));
++                var bounds = new Rect(first, last);
++                bounds.Inflate(10, 10); // 容下圆角外的阴影边距
++                if (bounds.Contains(physicalPoint)) return true;
++            }
++            if (InsideOpenSubmenu(item, physicalPoint)) return true;
++        }
++        return false;
+     }
+ 
+     public void Dispose()
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionMenus.cs b/code/BigBlueFish.Windows/Companion/CompanionMenus.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionMenus.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionMenus.cs
+@@ -36,6 +36,8 @@
+         test.Icon = Icon("\uE8F2");
+         test.Click += async (_, _) => { companionContextMenu.IsOpen = false; await SpeakCompanionTest(); };
+         companionContextMenu.Items.Add(test);
++        AppendActionMenu(companionContextMenu);
++        AppendDailyMenu(companionContextMenu);
+         var hide = new MenuItem { Header = "隐藏桌宠" };
+         hide.Icon = Icon("\uE8A7");
+         hide.Click += (_, _) => { companionContextMenu.IsOpen = false; HideCompanion(); };
+@@ -91,7 +93,7 @@
+         finally
+         {
+             weatherRequestPending = false;
+-            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+         }
+     }
+ 
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionMenuStyles.xaml b/code/BigBlueFish.Windows/Companion/CompanionMenuStyles.xaml
+--- a/code/BigBlueFish.Windows/Companion/CompanionMenuStyles.xaml
++++ b/code/BigBlueFish.Windows/Companion/CompanionMenuStyles.xaml
+@@ -31,17 +31,52 @@
+         <Setter Property="MinHeight" Value="38"/>
+         <Setter Property="Cursor" Value="Hand"/>
+         <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
++        <!-- 子菜单竖向排列（原模板没有 ItemsPanel，展开后会是横向的） -->
++        <Setter Property="ItemsPanel">
++            <Setter.Value>
++                <ItemsPanelTemplate>
++                    <StackPanel Orientation="Vertical" KeyboardNavigation.DirectionalNavigation="Cycle"/>
++                </ItemsPanelTemplate>
++            </Setter.Value>
++        </Setter>
+         <Setter Property="Template">
+             <Setter.Value>
+                 <ControlTemplate TargetType="MenuItem">
+-                    <Border x:Name="Item" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="7">
+-                        <Grid>
+-                            <Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+-                            <ContentPresenter ContentSource="Icon" VerticalAlignment="Center"/>
+-                            <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center" Margin="8,0,0,0"/>
+-                        </Grid>
+-                    </Border>
++                    <!-- 外面套一层 Grid 是为了放 Popup：原模板只有 Border，
++                         没有任何承载子菜单的容器，所以带子项的菜单项什么都不会弹出来。 -->
++                    <Grid>
++                        <Border x:Name="Item" Background="{TemplateBinding Background}" Padding="{TemplateBinding Padding}" CornerRadius="7">
++                            <Grid>
++                                <Grid.ColumnDefinitions>
++                                    <ColumnDefinition Width="24"/>
++                                    <ColumnDefinition Width="*"/>
++                                    <ColumnDefinition Width="Auto"/>
++                                </Grid.ColumnDefinitions>
++                                <ContentPresenter ContentSource="Icon" VerticalAlignment="Center"/>
++                                <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center" Margin="8,0,0,0"/>
++                                <TextBlock x:Name="Arrow" Grid.Column="2" Text="&#xE76C;"
++                                           FontFamily="Segoe MDL2 Assets" FontSize="10"
++                                           Foreground="#8A9AB8" VerticalAlignment="Center"
++                                           Margin="10,0,2,0" Visibility="Collapsed"/>
++                            </Grid>
++                        </Border>
++                        <Popup x:Name="PART_Popup"
++                               Placement="Right" HorizontalOffset="2" VerticalOffset="-6"
++                               IsOpen="{TemplateBinding IsSubmenuOpen}"
++                               AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
++                            <Border Margin="8" Padding="6" CornerRadius="12" MinWidth="184"
++                                    Background="White" BorderBrush="#DCE5F2" BorderThickness="1">
++                                <Border.Effect><DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.14" Color="#31405E"/></Border.Effect>
++                                <ScrollViewer MaxHeight="560" VerticalScrollBarVisibility="Auto"
++                                              HorizontalScrollBarVisibility="Disabled">
++                                    <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
++                                </ScrollViewer>
++                            </Border>
++                        </Popup>
++                    </Grid>
+                     <ControlTemplate.Triggers>
++                        <Trigger Property="Role" Value="TopLevelHeader"><Setter TargetName="Arrow" Property="Visibility" Value="Visible"/></Trigger>
++                        <Trigger Property="Role" Value="SubmenuHeader"><Setter TargetName="Arrow" Property="Visibility" Value="Visible"/></Trigger>
+                         <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Item" Property="Background" Value="#EDF3FC"/></Trigger>
+                         <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Item" Property="Background" Value="#DCEAFF"/></Trigger>
+                         <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionNative.cs b/code/BigBlueFish.Windows/Companion/CompanionNative.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionNative.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionNative.cs
+@@ -26,6 +26,10 @@
+     internal static extern bool GetWindowRect(IntPtr h, out Rect r);
+     [DllImport("user32.dll")]
+     internal static extern uint GetWindowThreadProcessId(IntPtr h, out uint p);
++    [DllImport("user32.dll", SetLastError = true)]
++    internal static extern bool AddClipboardFormatListener(IntPtr h);
++    [DllImport("user32.dll", SetLastError = true)]
++    internal static extern bool RemoveClipboardFormatListener(IntPtr h);
+     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+     internal static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionPreferences.cs b/code/BigBlueFish.Windows/Companion/CompanionPreferences.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionPreferences.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionPreferences.cs
+@@ -31,10 +31,17 @@
+         <= 17 => 15,
+         _ => 20
+     };
+-    internal TimeSpan NextSpeechDelay(Random random)
++    // 好感度与精力一起决定「她多久主动开口一次」：
++    // 越亲越爱搭话（最短缩到 0.55 倍），精力低就懒得多说（拉长到 1.7 倍）。
++    internal TimeSpan NextSpeechDelay(Random random, double affection = 50, double energy = 80)
+     {
+         var range = SpeechRanges[SpeechRangeIndex];
+-        return TimeSpan.FromMinutes(range.Min + random.NextDouble() * (range.Max - range.Min));
++        var minutes = range.Min + random.NextDouble() * (range.Max - range.Min);
++        var factor = 1.55 - Math.Clamp(affection, 0, 100) * .010;      // 100 → 0.55，0 → 1.55
++        if (energy < 25) factor *= 1.7;
++        else if (energy < 45) factor *= 1.25;
++        else if (energy > 75) factor *= .9;
++        return TimeSpan.FromMinutes(Math.Clamp(minutes * factor, 1.0, 90.0));
+     }
+     public int BubbleDurationIndex { get; set; } = 3;
+     public int AnimationIntervalSeconds { get; set; } = 40;
+@@ -42,6 +49,33 @@
+     public int LunchHour { get; set; } = 12;
+     public int DinnerHour { get; set; } = 18;
+     public string? LastBrushDate { get; set; }
++
++    // —— 工作识别：前台是编辑器/IDE 时切到对应动作 ——
++    public bool WorkRecognition { get; set; } = true;
++
++    // —— 所有动作都能自己播：关掉就退回原版「只有 Event 池会自播」的行为 ——
++    public bool AutoPlayAllActions { get; set; } = true;
++
++    // —— 养成数值，0~100 ——
++    public double Affection { get; set; } = 50;
++    public double Satiety { get; set; } = 70;
++    public double Energy { get; set; } = 80;
++    public string? VitalsStamp { get; set; }
++
++    // —— 生日：0 表示没设置 ——
++    public int BirthdayMonth { get; set; }
++    public int BirthdayDay { get; set; }
++    public int LastBirthdayYear { get; set; }
++
++    // —— 剪贴板联动，默认关闭，需要自己打开 ——
++    public bool ClipboardWatch { get; set; }
++    public bool ClipboardTranslate { get; set; } = true;
++    public bool ClipboardCode { get; set; } = true;
++    public bool ClipboardLink { get; set; } = true;
++
++    // —— 番茄钟与久坐提醒 ——
++    public int PomodoroMinutes { get; set; } = 25;
++    public int SitLimitMinutes { get; set; } = 90;
+ 
+     internal static readonly int[] BubbleDurations =
+     {
+@@ -97,6 +131,13 @@
+                     s.SpeechMinMinutes = NormalizeSpeechMinimum(s.SpeechMinMinutes);
+                     s.BubbleDurationIndex = Math.Clamp(s.BubbleDurationIndex, 0, BubbleDurations.Length - 1);
+                     s.WeatherRegionCode = CompanionRegions.District(s.WeatherRegionCode).Code;
++                    s.Affection = Math.Clamp(s.Affection, 0, 100);
++                    s.Satiety = Math.Clamp(s.Satiety, 0, 100);
++                    s.Energy = Math.Clamp(s.Energy, 0, 100);
++                    s.BirthdayMonth = Math.Clamp(s.BirthdayMonth, 0, 12);
++                    s.BirthdayDay = Math.Clamp(s.BirthdayDay, 0, 31);
++                    s.PomodoroMinutes = Math.Clamp(s.PomodoroMinutes, 5, 180);
++                    s.SitLimitMinutes = Math.Clamp(s.SitLimitMinutes, 20, 480);
+                     return s;
+                 }
+             }
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionSettings.cs b/code/BigBlueFish.Windows/Companion/CompanionSettings.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionSettings.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionSettings.cs
+@@ -69,9 +69,9 @@
+ #endif
+         sidebar.Children.Add(new TextBlock { Text = version + " · 陪伴设置", Foreground = Brushes.SlateGray, Margin = new Thickness(5, 0, 0, 28) });
+ #if COMPANION_SAFE
+-        var titles = new[] { "陪伴与外观", "说话与天气", "模型与供电" };
++        var titles = new[] { "陪伴与外观", "说话与天气", "模型与供电", "鱼鱼的日常" };
+ #else
+-        var titles = new[] { "陪伴与外观", "说话与天气", "模型与供电", "Agent 与 MCP" };
++        var titles = new[] { "陪伴与外观", "说话与天气", "模型与供电", "Agent 与 MCP", "鱼鱼的日常" };
+ #endif
+         var pages = new StackPanel[titles.Length];
+         var views = new ScrollViewer[titles.Length];
+@@ -238,7 +238,7 @@
+         {
+             if (freq.SelectedIndex < 0) return;
+             preferences.SpeechMinMinutes = CompanionPreferences.SpeechRanges[freq.SelectedIndex].Min;
+-            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+             SaveCompanion();
+         };
+         p.Children.Add(freq);
+@@ -329,7 +329,78 @@
+             w.Close();
+             base.Close();
+         });
+-        Action? disposeMcpSettings = pages.Length > 3 ? AddMcpSettings(pages[3], w) : null;
++        // —— 鱼鱼的日常 ——
++        p = pages[^1];
++        Toggle("写代码 / 办公时切换对应动作", preferences.WorkRecognition, v => preferences.WorkRecognition = v);
++        Toggle("所有动作都会自己播（不只是点了才播）", preferences.AutoPlayAllActions, v => preferences.AutoPlayAllActions = v);
++        Toggle("剪贴板联动（翻译、吐槽、看链接）", preferences.ClipboardWatch, v =>
++        {
++            preferences.ClipboardWatch = v;
++            clipboardLast = "";
++        });
++        p.Children.Add(new TextBlock
++        {
++            Text = "剪贴板内容只交给本机模型处理，不会上传。",
++            FontSize = 11,
++            Foreground = Brushes.SlateGray,
++            TextWrapping = TextWrapping.Wrap,
++            Margin = new Thickness(0, 0, 0, 6)
++        });
++        p.Children.Add(new TextBlock { Text = "生日（格式 月-日，例如 08-15；留空则不提醒）", Margin = new Thickness(0, 12, 0, 4) });
++        var birthdayBox = new TextBox
++        {
++            MinHeight = 30,
++            Width = 120,
++            HorizontalAlignment = HorizontalAlignment.Left,
++            Text = preferences.BirthdayMonth > 0 ? $"{preferences.BirthdayMonth:00}-{preferences.BirthdayDay:00}" : ""
++        };
++        birthdayBox.LostFocus += (_, _) =>
++        {
++            var raw = birthdayBox.Text.Trim().Replace('/', '-').Replace('.', '-');
++            var parts = raw.Split('-', StringSplitOptions.RemoveEmptyEntries);
++            if (parts.Length == 2 && int.TryParse(parts[0], out var month) && int.TryParse(parts[1], out var day)
++                && month is >= 1 and <= 12 && day is >= 1 and <= 31)
++            {
++                preferences.BirthdayMonth = month;
++                preferences.BirthdayDay = day;
++            }
++            else if (raw.Length == 0)
++            {
++                preferences.BirthdayMonth = 0;
++                preferences.BirthdayDay = 0;
++            }
++            SaveCompanion();
++        };
++        p.Children.Add(birthdayBox);
++        var pomodoroLabel = new TextBlock { Text = $"番茄钟时长：{preferences.PomodoroMinutes} 分钟", Margin = new Thickness(0, 16, 0, 4) };
++        p.Children.Add(pomodoroLabel);
++        var pomodoroSlider = new Slider { Minimum = 5, Maximum = 90, Value = preferences.PomodoroMinutes, TickFrequency = 5, IsSnapToTickEnabled = true };
++        System.Windows.Automation.AutomationProperties.SetName(pomodoroSlider, "番茄钟时长");
++        pomodoroSlider.ValueChanged += (_, _) =>
++        {
++            preferences.PomodoroMinutes = (int)Math.Round(pomodoroSlider.Value);
++            pomodoroLabel.Text = $"番茄钟时长：{preferences.PomodoroMinutes} 分钟";
++            SaveCompanion();
++        };
++        p.Children.Add(pomodoroSlider);
++        var sitLabel = new TextBlock { Text = $"久坐提醒：{preferences.SitLimitMinutes} 分钟", Margin = new Thickness(0, 16, 0, 4) };
++        p.Children.Add(sitLabel);
++        var sitSlider = new Slider { Minimum = 30, Maximum = 240, Value = preferences.SitLimitMinutes, TickFrequency = 15, IsSnapToTickEnabled = true };
++        System.Windows.Automation.AutomationProperties.SetName(sitSlider, "久坐提醒");
++        sitSlider.ValueChanged += (_, _) =>
++        {
++            preferences.SitLimitMinutes = (int)Math.Round(sitSlider.Value);
++            sitLabel.Text = $"久坐提醒：{preferences.SitLimitMinutes} 分钟";
++            sitSince = DateTime.Now;
++            SaveCompanion();
++        };
++        p.Children.Add(sitSlider);
++        var vitalsText = new TextBlock { TextWrapping = TextWrapping.Wrap, Foreground = Brushes.SlateGray, Margin = new Thickness(0, 16, 0, 4), Text = VitalsSummary() };
++        p.Children.Add(vitalsText);
++        Button("喂她吃点东西", FeedCompanion);
++        Button("让她看看我在干什么", () => { _ = ReportScreenAsync(); });
++        timer.Tick += (_, _) => vitalsText.Text = VitalsSummary();
++        Action? disposeMcpSettings = pages.Length > 4 ? AddMcpSettings(pages[3], w) : null;
+         foreach (var panel in pages) Card(panel);
+         disposeCompanionSettingsContent = () => { timer.Stop(); disposeMcpSettings?.Invoke(); };
+         refreshCompanionSettings = () => BuildCompanionSettingsContent(w, selectedPage, views.Select(v => v.VerticalOffset).ToArray());
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionVitals.cs b/code/BigBlueFish.Windows/Companion/CompanionVitals.cs
+--- /dev/null
++++ b/code/BigBlueFish.Windows/Companion/CompanionVitals.cs
+@@ -0,0 +1,309 @@
++using System;
++using System.Collections.Generic;
++using System.Globalization;
++using System.Linq;
++
++namespace BigBlueFish.Windows;
++
++// 养成数值：好感度 / 饱食度 / 精力。
++// 掉太快会烦人，涨太容易又没意思，所以按小时给一个温和的斜率，
++// 离线太久最多补算 12 小时，免得隔三天回来发现她已经饿死了。
++public partial class MainWindow
++{
++    // 投喂一次只加 2.5：饱食 50 → 100 正好要喂 20 次，让「喂她」变成一个长期的日常动作，
++    // 而不是两下就喂满。既然涨得慢，衰减也必须同步调慢（原来 4/时），否则永远补不回来。
++    private const double FeedSatietyGain = 2.5;
++    private const double SatietyPerHour = 1.5;
++    private const double EnergyPerHourAwake = 5.0;
++    private const double EnergyPerHourAsleep = 8.0;
++    private const double AffectionDriftPerHour = 0.25;
++    private const double AffectionNeglectPerHour = 1.2;
++    private const double MaxOfflineHours = 12;
++    // 饿到多少她才开口讨吃。投喂一次只加 2.5，卡在 30 的话她一天都不一定会说话，所以放宽到 50。
++    private const double HungerAskBelow = 50;
++    private const double HungerUrgentBelow = 25;
++
++    private bool vitalsLoaded;
++    private DateTime vitalsNextSave = DateTime.MinValue;
++    private DateTime vitalsNextNotice = DateTime.MinValue;
++    private DateTime hungerAskNext = DateTime.MinValue;
++    private DateTime sleepyAskNext = DateTime.MinValue;
++    private DateTime clingNext = DateTime.MinValue;
++
++    private void LoadVitals()
++    {
++        if (vitalsLoaded) return;
++        vitalsLoaded = true;
++        var now = DateTime.Now;
++        if (DateTime.TryParse(preferences.VitalsStamp, CultureInfo.InvariantCulture,
++                DateTimeStyles.RoundtripKind, out var stamp))
++            ApplyVitalsDecay(stamp, now);
++        preferences.VitalsStamp = now.ToString("O", CultureInfo.InvariantCulture);
++    }
++
++    // 每次 tick 只做「到点补算」，真正写盘两分钟一次，别把 preferences.json 写烂。
++    private void VitalsTick()
++    {
++        LoadVitals();
++        brain.Affection = preferences.Affection;
++        var now = DateTime.Now;
++        if (DateTime.TryParse(preferences.VitalsStamp, CultureInfo.InvariantCulture,
++                DateTimeStyles.RoundtripKind, out var stamp) && (now - stamp).TotalSeconds >= 30)
++        {
++            ApplyVitalsDecay(stamp, now);
++            preferences.VitalsStamp = now.ToString("O", CultureInfo.InvariantCulture);
++        }
++        else if (!DateTime.TryParse(preferences.VitalsStamp, CultureInfo.InvariantCulture,
++                DateTimeStyles.RoundtripKind, out _))
++        {
++            preferences.VitalsStamp = now.ToString("O", CultureInfo.InvariantCulture);
++        }
++        if (now >= vitalsNextSave)
++        {
++            vitalsNextSave = now.AddMinutes(2);
++            SaveCompanion();
++        }
++        VitalsSocialTick(now);
++    }
++
++    // 数值驱动她「主动来找你」：饿了讨吃的、困了想睡、太亲了黏人。
++    private void VitalsSocialTick(DateTime now)
++    {
++        if (!companionReady || companionClosed || PuppetActive) return;
++        if (hiddenByUser || fullscreenHidden || companionSettings != null) return;
++        if (speechRequestPending || brain.Busy) return;
++
++        // 饿了：主动讨投喂，越饿越勤（45 分钟 → 20 分钟）。深夜不吵主人。
++        if (preferences.Satiety < HungerAskBelow && now >= hungerAskNext && now.Hour is >= 8 and < 23)
++        {
++            hungerAskNext = now.AddMinutes(preferences.Satiety < HungerUrgentBelow ? 20 : 45);
++            FlashGauge(1);
++            var rule = animationPolicy?.Rules.FirstOrDefault(r => r.Pool != "Disabled" && r.Meal != null);
++            if (rule != null) { mcpActions.Clear(); CancelMovement(); PlayAnimation(rule, "Event"); }
++            ShowCompanionNotice(preferences.Satiety < HungerUrgentBelow
++                ? "主人…鱼鱼饿得有点晕了，真的不能吃一口吗…"
++                : "唔…主人，鱼鱼肚子在叫了，能不能喂鱼鱼一点吃的呀");
++            return;
++        }
++
++        // 困了：白天会念叨一句，深夜就自己睡（不打扰）。
++        if (preferences.Energy < 22 && now >= sleepyAskNext)
++        {
++            sleepyAskNext = now.AddMinutes(35);
++            FlashGauge(2);
++            if (now.Hour is >= 8 and < 23)
++            {
++                var rule = animationPolicy?.Rules.FirstOrDefault(r => r.Pool != "Disabled" && r.Id.Contains("哈欠"));
++                if (rule != null) { mcpActions.Clear(); CancelMovement(); PlayAnimation(rule, "Event"); }
++                ShowCompanionNotice("主人…鱼鱼眼睛睁不开了，可以靠着主人眯一小会儿吗…");
++            }
++            return;
++        }
++
++        // 很亲的时候：主动凑过来说话（频率已由 NextSpeechDelay 提高，这里只补一个主动贴贴）。
++        if (preferences.Affection >= 85 && now >= clingNext && companionRandom.NextDouble() < .5)
++        {
++            clingNext = now.AddMinutes(40);
++            var rule = FindAnimation("撒娇", "蹭", "抱", "开心", "跃动");
++            if (rule != null) { mcpActions.Clear(); CancelMovement(); PlayAnimation(rule, "Event"); }
++            ShowCompanionNotice("主人～鱼鱼就在旁边哦，有事叫鱼鱼");
++        }
++    }
++
++    private void ApplyVitalsDecay(DateTime from, DateTime to)
++    {
++        if (to <= from) return;
++        var hours = Math.Min((to - from).TotalHours, MaxOfflineHours);
++        double satietyLoss = 0, energyGain = 0;
++        var step = TimeSpan.FromMinutes(15);
++        var cursor = from;
++        var consumed = 0.0;
++        while (consumed < hours)
++        {
++            var slice = Math.Min(step.TotalHours, hours - consumed);
++            bool asleep = cursor.Hour >= 23 || cursor.Hour < 8;
++            satietyLoss += SatietyPerHour * slice;
++            energyGain += (asleep ? EnergyPerHourAsleep : -EnergyPerHourAwake) * slice;
++            consumed += slice;
++            cursor = cursor.AddHours(slice);
++        }
++        preferences.Satiety = Math.Clamp(preferences.Satiety - satietyLoss, 0, 100);
++        preferences.Energy = Math.Clamp(preferences.Energy + energyGain, 0, 100);
++        bool neglected = preferences.Satiety < 20 || preferences.Energy < 20;
++        preferences.Affection = Math.Clamp(preferences.Affection
++            - (neglected ? AffectionNeglectPerHour : AffectionDriftPerHour) * hours, 0, 100);
++    }
++
++    private CompanionAnimationRule? FindAnimation(params string[] keywords) =>
++        animationPolicy?.Rules.FirstOrDefault(r => r.Pool != "Disabled"
++            && keywords.Any(k => r.Id.Contains(k, StringComparison.Ordinal)));
++
++    // 数值低到一定程度时，动画边界会优先播对应的动作，而不是继续随机。
++    private bool TryVitalsAnimation()
++    {
++        if (!companionReady || companionClosed || animationPolicy == null) return false;
++        if (preferences.Energy < 18 && companionRandom.NextDouble() < .55)
++        {
++            var rule = FindAnimation("打瞌睡", "小憩", "沉眠", "哈欠", "发呆");
++            if (rule != null)
++            {
++                PlayAnimation(rule, "Event");
++                VitalsNotice("主人…鱼鱼好困，眼睛要合上了…");
++                return true;
++            }
++        }
++        if (preferences.Satiety < 22 && companionRandom.NextDouble() < .55)
++        {
++            var rule = animationPolicy.Rules.FirstOrDefault(r => r.Pool != "Disabled" && r.Meal != null);
++            if (rule != null)
++            {
++                PlayAnimation(rule, "Event");
++                VitalsNotice("主人，鱼鱼肚子咕咕叫了…");
++                return true;
++            }
++        }
++        if (preferences.Affection > 80 && companionRandom.NextDouble() < .2)
++        {
++            var rule = FindAnimation("撒娇", "开心", "跃动", "哼歌", "伸懒腰");
++            if (rule != null) { PlayAnimation(rule, "Event"); return true; }
++        }
++        return false;
++    }
++
++    private void VitalsNotice(string text)
++    {
++        var now = DateTime.Now;
++        if (now < vitalsNextNotice) return;
++        vitalsNextNotice = now.AddMinutes(10);
++        ShowCompanionNotice(text);
++    }
++
++    // 喂她吃东西：饱食度小涨（一次 2.5，50→100 要 20 次），好感度小涨，顺手播一个吃饭动作。
++    private void FeedCompanion()
++    {
++        if (companionClosed || !companionReady) return;
++        if (hiddenByUser) RestoreCompanion();
++        ApplyMealVitals();
++        var rule = PickMealAction();
++        if (rule != null && !PuppetActive)
++        {
++            mcpActions.Clear();
++            CancelMovement();
++            PlayAnimation(rule, "External");
++        }
++        var text = preferences.Satiety >= 90
++            ? "呜…吃太饱了，鱼鱼要躺平一会儿～"
++            : preferences.Satiety >= 50
++                ? "谢谢主人！鱼鱼吃得饱饱的～"
++                : "还有吗还有吗？鱼鱼还没吃饱…";
++        vitalsNextNotice = DateTime.Now.AddMinutes(3);
++        ShowCompanionNotice(text);
++    }
++
++    // 数值部分单独抽出来：从右键「吃点什么」直接点某道菜时，动作播你点的那一个，
++    // 数值也照投喂算 —— 不然会出现「明明看她吃了，饱食一点没涨」的怪事。
++    private void ApplyMealVitals()
++    {
++        preferences.Satiety = Math.Clamp(preferences.Satiety + FeedSatietyGain, 0, 100);
++        preferences.Affection = Math.Clamp(preferences.Affection + TakeFeedAffection(), 0, 100);
++        preferences.Energy = Math.Clamp(preferences.Energy + 2, 0, 100);
++        brain.Affection = preferences.Affection;
++        SaveCompanion();
++        FlashGauge(1);
++        hungerAskNext = DateTime.Now.AddMinutes(40);
++    }
++
++    // 投喂时播哪个吃饭动作：跟右键菜单「吃点什么」那一组完全一致（21 个）。
++    // 原来只挑 animations.json 里 Meal 明确标了早/午/晚餐的 3 个，所以看起来永远是那三下；
++    // 现在整组随机，偶尔也会出现「涮火锅」「吃西瓜」「偷吃零食被抓住」。
++    private CompanionAnimationRule? PickMealAction()
++    {
++        var policy = animationPolicy ?? menuActionPolicy;
++        if (policy == null) return null;
++        var pool = policy.Rules
++            .Where(r => r.Pool != "Disabled" && MenuGroupOf(r) == "吃点什么")
++            .ToArray();
++        return pool.Length == 0 ? null : pool[Random.Shared.Next(pool.Length)];
++    }
++
++    // 摸一摸：点一下就涨一点好感，涨得慢才显得金贵。
++    private void PetCompanion()
++    {
++        preferences.Affection = Math.Clamp(preferences.Affection + 0.5, 0, 100);
++        FlashGauge(0);
++    }
++
++    // —————————————— 互动涨好感 ——————————————
++    //
++    // 光靠摸头太少了，所以她做的每件事都算数：
++    //   · 右键点一个动作        +0.5（同一个动作 10 分钟内重复只 +0.1）
++    //   · 喂她吃一次            +5.0（10 分钟内再喂只 +1.0）
++    //   · 双击找她聊天          +1.0（5 分钟最多一次）
++    //   · 每发一条消息          +0.6（30 秒最多一次）
++    // 递减不是小气：不这么写的话按住一个动作连点就能把好感刷满，数值就没意义了。
++    private const double ActionAffectionGain = 0.5;
++    private const double ActionAffectionRepeat = 0.1;
++    private const double FeedAffectionGain = 5.0;
++    private const double FeedAffectionRepeat = 1.0;
++    private const double ChatOpenAffectionGain = 1.0;
++    private const double ChatMessageAffectionGain = 0.6;
++    private readonly Dictionary<string, DateTime> actionAffectionAt = new();
++    private DateTime chatOpenAffectionAt = DateTime.MinValue;
++    private DateTime chatMessageAffectionAt = DateTime.MinValue;
++
++    private void GrantAffection(double amount)
++    {
++        if (amount <= 0) return;
++        preferences.Affection = Math.Clamp(preferences.Affection + amount, 0, 100);
++        brain.Affection = preferences.Affection;
++        FlashGauge(0);
++        SaveCompanion();
++    }
++
++    // 同一条互动 10 分钟内重复只给零头。返回这次该加多少。
++    private double InteractionGain(string key, double full, double repeat)
++    {
++        var now = DateTime.Now;
++        if (actionAffectionAt.Count > 256) actionAffectionAt.Clear();
++        var gain = actionAffectionAt.TryGetValue(key, out var last) && (now - last).TotalMinutes < 10
++            ? repeat
++            : full;
++        actionAffectionAt[key] = now;
++        return gain;
++    }
++
++    // 点右键菜单里的动作。换个动作才有全额，鼓励把 106 个都玩一遍。
++    private void GrantActionAffection(string id) =>
++        GrantAffection(InteractionGain("action:" + id, ActionAffectionGain, ActionAffectionRepeat));
++
++    // 喂食 / 点某道菜给的好感。
++    private double TakeFeedAffection() =>
++        InteractionGain("feed", FeedAffectionGain, FeedAffectionRepeat);
++
++    // 双击打开聊天输入框。
++    private void GrantChatOpenAffection()
++    {
++        var now = DateTime.Now;
++        if ((now - chatOpenAffectionAt).TotalMinutes < 5) return;
++        chatOpenAffectionAt = now;
++        GrantAffection(ChatOpenAffectionGain);
++    }
++
++    // 发出一条消息。连发不重复计数。
++    private void GrantChatMessageAffection()
++    {
++        var now = DateTime.Now;
++        if ((now - chatMessageAffectionAt).TotalSeconds < 30) return;
++        chatMessageAffectionAt = now;
++        GrantAffection(ChatMessageAffectionGain);
++    }
++
++    internal string VitalsSummary()
++    {
++        var mood = preferences.Affection >= 75 ? "很喜欢主人"
++            : preferences.Affection >= 45 ? "和主人还挺好"
++            : preferences.Affection >= 20 ? "有点想被理一理"
++            : "在闹别扭";
++        return $"好感 {preferences.Affection:0}｜饱食 {preferences.Satiety:0}｜精力 {preferences.Energy:0}（{mood}）";
++    }
++}
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionVitalsHud.cs b/code/BigBlueFish.Windows/Companion/CompanionVitalsHud.cs
+--- /dev/null
++++ b/code/BigBlueFish.Windows/Companion/CompanionVitalsHud.cs
+@@ -0,0 +1,226 @@
++using System;
++using System.Windows;
++using System.Windows.Controls;
++using System.Windows.Input;
++using System.Windows.Media;
++using System.Windows.Shapes;
++
++namespace BigBlueFish.Windows;
++
++// 右上角的三格小仪表：好感 / 饱食 / 精力。
++//
++// 设计参考（VPet、Tongluv 这类养成桌宠的通行做法）：
++// 数值必须「一眼看得懂」，所以用图标 + 短条，不用数字；低于阈值才动起来吸引注意，
++// 平时安静待着，不抢戏。点一下能看到具体数值和她的心情。
++public partial class MainWindow
++{
++    private sealed class VitalsGauge
++    {
++        public required FrameworkElement Row { get; init; }
++        public required Rectangle Fill { get; init; }
++        public required FrameworkElement Icon { get; init; }
++        public required ScaleTransform Scale { get; init; }
++        public double Shown { get; set; }
++        public double Target { get; set; }
++        public DateTime FlashUntil { get; set; }
++        public double TrackWidth { get; init; }
++    }
++
++    private readonly VitalsGauge[] gauges = new VitalsGauge[3];
++    private FrameworkElement? vitalsHud;
++
++    // 气泡给右上角仪表让出的宽度（DIP）。
++    internal double CompanionBubbleRightInset => vitalsHud != null ? 44 : 0;
++    private DateTime vitalsHudBuilt = DateTime.MinValue;
++
++    private static readonly Color HeartColor = Color.FromRgb(0xE2, 0x5C, 0x7C);
++    private static readonly Color RiceColor = Color.FromRgb(0xE0, 0x9B, 0x3D);
++    private static readonly Color BoltColor = Color.FromRgb(0x4F, 0x9E, 0xC8);
++
++    private void BuildVitalsHud()
++    {
++        var panel = new StackPanel
++        {
++            Orientation = Orientation.Vertical,
++            HorizontalAlignment = HorizontalAlignment.Right,
++            VerticalAlignment = VerticalAlignment.Top,
++            Margin = new Thickness(0, 6, 8, 0),
++            IsHitTestVisible = true,
++            Cursor = Cursors.Hand,
++            ToolTip = "点一下，鱼鱼会说说自己的状态"
++        };
++
++        gauges[0] = AddGauge(panel, GlyphIcon("\u2665", HeartColor), HeartColor);
++        gauges[1] = AddGauge(panel, BowlIcon(RiceColor), RiceColor);
++        gauges[2] = AddGauge(panel, GlyphIcon("\u26A1", BoltColor), BoltColor);
++
++        // 点仪表不拖窗，改让她说一句自己的状态。
++        panel.PreviewMouseLeftButtonDown += (_, e) =>
++        {
++            e.Handled = true;
++            ShowCompanionNotice(VitalsSummary(), 12);
++        };
++        panel.PreviewMouseRightButtonDown += (_, e) => e.Handled = true;
++
++        Panel.SetZIndex(panel, 25);
++        vitalsHud = panel;
++        companionLayout.Children.Add(panel);
++        vitalsHudBuilt = DateTime.UtcNow;
++    }
++
++    private static FrameworkElement GlyphIcon(string glyph, Color color) => new TextBlock
++    {
++        Text = glyph,
++        FontSize = 11,
++        Width = 12,
++        TextAlignment = TextAlignment.Center,
++        VerticalAlignment = VerticalAlignment.Center,
++        Foreground = new SolidColorBrush(color),
++        FontFamily = new FontFamily("Segoe UI Symbol")
++    };
++
++    // 一只小饭碗：碗身 + 上面一撮饭。比一个圆点更像"饱食"。
++    private static FrameworkElement BowlIcon(Color color)
++    {
++        var brush = new SolidColorBrush(color);
++        var canvas = new Canvas { Width = 12, Height = 12, VerticalAlignment = VerticalAlignment.Center };
++        var bowl = new Path
++        {
++            Data = Geometry.Parse("M1.4,5.2 L10.6,5.2 C10.6,8.4 8.8,10.4 6,10.4 C3.2,10.4 1.4,8.4 1.4,5.2 Z"),
++            Fill = brush
++        };
++        var rice = new Path
++        {
++            Data = Geometry.Parse("M2.6,4.6 C3.4,3.1 4.5,2.3 6,2.3 C7.5,2.3 8.6,3.1 9.4,4.6 Z"),
++            Fill = brush,
++            Opacity = .75
++        };
++        var baseLine = new Path
++        {
++            Data = Geometry.Parse("M1,11.4 L11,11.4"),
++            Stroke = brush,
++            StrokeThickness = 1,
++            Opacity = .6
++        };
++        canvas.Children.Add(bowl);
++        canvas.Children.Add(rice);
++        canvas.Children.Add(baseLine);
++        return canvas;
++    }
++
++    private VitalsGauge AddGauge(Panel host, FrameworkElement icon, Color color)
++    {
++        const double trackWidth = 30;
++        var fill = new Rectangle
++        {
++            Width = trackWidth,
++            Height = 5,
++            RadiusX = 2.5,
++            RadiusY = 2.5,
++            Fill = new SolidColorBrush(color),
++            HorizontalAlignment = HorizontalAlignment.Left
++        };
++        var track = new Border
++        {
++            Width = trackWidth,
++            Height = 5,
++            CornerRadius = new CornerRadius(2.5),
++            Background = new SolidColorBrush(Color.FromArgb(46, 40, 48, 60)),
++            VerticalAlignment = VerticalAlignment.Center,
++            Child = new Grid { Children = { fill } }
++        };
++        var row = new StackPanel
++        {
++            Orientation = Orientation.Horizontal,
++            Margin = new Thickness(0, 1, 0, 1)
++        };
++        row.Children.Add(icon);
++        row.Children.Add(new Border { Width = 3 });
++        row.Children.Add(track);
++
++        var scale = new ScaleTransform(1, 1);
++        row.RenderTransformOrigin = new Point(0, .5);
++        row.RenderTransform = scale;
++
++        var frame = new Border
++        {
++            CornerRadius = new CornerRadius(8),
++            Background = new SolidColorBrush(Color.FromArgb(214, 255, 252, 246)),
++            BorderBrush = new SolidColorBrush(Color.FromArgb(38, 80, 96, 152)),
++            BorderThickness = new Thickness(1),
++            Padding = new Thickness(4, 3, 5, 3),
++            Margin = new Thickness(0, 0, 0, 2),
++            Child = row,
++            Opacity = .92
++        };
++        var shadow = new System.Windows.Media.Effects.DropShadowEffect
++        {
++            Color = global::BigBlueFish.Windows.CompanionBubble.HairBlue,
++            BlurRadius = 6,
++            ShadowDepth = 1,
++            Opacity = .14
++        };
++        frame.Effect = shadow;
++        host.Children.Add(frame);
++
++        return new VitalsGauge
++        {
++            Row = frame,
++            Fill = fill,
++            Icon = icon,
++            Scale = scale,
++            TrackWidth = trackWidth
++        };
++    }
++
++    // 每帧调用（40ms）。数值平滑靠近目标，低值脉动，涨的时候闪一下。
++    private void UpdateVitalsHud(DateTime now)
++    {
++        if (vitalsHud == null || gauges[0] == null) return;
++        var phase = (now - vitalsHudBuilt).TotalSeconds;
++        var pulse = .55 + .45 * (0.5 + 0.5 * Math.Sin(phase * 4.2));
++
++        UpdateGauge(gauges[0], preferences.Affection, now, phase, pulse);
++        UpdateGauge(gauges[1], preferences.Satiety, now, phase, pulse);
++        UpdateGauge(gauges[2], preferences.Energy, now, phase, pulse);
++    }
++
++    private static void UpdateGauge(VitalsGauge gauge, double value, DateTime now, double phase, double pulse)
++    {
++        gauge.Target = Math.Clamp(value, 0, 100);
++        // 平滑：每帧靠近 12%，避免喂食后数字一下跳过去。
++        gauge.Shown += (gauge.Target - gauge.Shown) * .12;
++        if (Math.Abs(gauge.Target - gauge.Shown) < .2) gauge.Shown = gauge.Target;
++        gauge.Fill.Width = Math.Max(1.5, gauge.TrackWidth * gauge.Shown / 100);
++
++        bool flashing = now < gauge.FlashUntil;
++        if (flashing)
++        {
++            var k = 1 + .18 * Math.Sin((gauge.FlashUntil - now).TotalSeconds * 12);
++            gauge.Scale.ScaleX = gauge.Scale.ScaleY = k;
++            gauge.Row.Opacity = 1;
++        }
++        else if (gauge.Target < 25)
++        {
++            // 低了才动：轻轻呼吸，提醒主人该管管了，但不至于烦。
++            gauge.Scale.ScaleX = gauge.Scale.ScaleY = 1;
++            gauge.Row.Opacity = pulse;
++        }
++        else
++        {
++            gauge.Scale.ScaleX = gauge.Scale.ScaleY = 1;
++            gauge.Row.Opacity = .92;
++        }
++    }
++
++    private void FlashGauge(int index)
++    {
++        if (index < 0 || index >= gauges.Length || gauges[index] == null) return;
++        gauges[index].FlashUntil = DateTime.UtcNow.AddSeconds(1.6);
++    }
++
++    private void FlashAllGauges()
++    {
++        for (int i = 0; i < gauges.Length; i++) FlashGauge(i);
++    }
++}
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionWindow.cs b/code/BigBlueFish.Windows/Companion/CompanionWindow.cs
+--- a/code/BigBlueFish.Windows/Companion/CompanionWindow.cs
++++ b/code/BigBlueFish.Windows/Companion/CompanionWindow.cs
+@@ -1,5 +1,6 @@
+ using Microsoft.Win32;
+ using System;
++using System.Collections.Generic;
+ using System.IO;
+ using System.Linq;
+ using System.Threading.Tasks;
+@@ -46,6 +47,9 @@
+     private System.Threading.Mutex? singleInstance;
+     private FileStream? instanceLock;
+     private double SpriteSize => 280 * preferences.Scale;
++    // --test-mode 之外再认一个标记文件：桌宠被外部守护拉起来时带不上命令行参数，
++    // 有标记文件也能进自动化模式，方便回归测试。
++    private static bool TestMode => App.Args.Contains("--test-mode") || File.Exists("test-mode.flag");
+     internal double CompanionSpriteSize => SpriteSize;
+     internal Border CompanionBubble => bubble;
+     internal TextBlock CompanionBubbleText => bubbleText;
+@@ -164,6 +168,7 @@
+         };
+         Panel.SetZIndex(loadingIndicator, 20);
+         companionLayout.Children.Add(loadingIndicator);
++        BuildVitalsHud();
+         speech = new CompanionSpeech(bubbleText, bubble, () => CompanionEdgeLayout.Refresh(this), ResetBubbleDeadline);
+         Content = companionLayout;
+         ApplyCompanionScale(false);
+@@ -236,10 +241,17 @@
+         hookInstalled = true;
+         CompanionNative.SetStyle(h, -20, new IntPtr(CompanionNative.GetStyle(h, -20).ToInt64() | 0x08000000L | 0x80L));
+         HwndSource.FromHwnd(h)?.AddHook(CompanionWndProc);
++        // 剪贴板监听：只收系统通知，内容仍然在本机处理。
++        CompanionNative.AddClipboardFormatListener(h);
+     }
+ 
+     private IntPtr CompanionWndProc(IntPtr hwnd, int msg, IntPtr w, IntPtr l, ref bool handled)
+     {
++        if (msg == 0x031D) // WM_CLIPBOARDUPDATE
++        {
++            OnClipboardChanged();
++            return IntPtr.Zero;
++        }
+         if (msg == 0x21)
+         {
+             handled = true;
+@@ -261,7 +273,7 @@
+             if (e.Mode == PowerModes.Suspend)
+                 brain.Stop();
+             ApplyCompanionPowerPolicy();
+-            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+         });
+     }
+ 
+@@ -340,6 +352,7 @@
+         e.Handled = true;
+         if (e.ClickCount == 2 && TryOpenMcpInput()) {
+             PublishMcpInteraction("click", new { button = "left", count = 2, Left, Top });
++            GrantChatOpenAffection();
+             return;
+         }
+         dragging = true;
+@@ -410,6 +423,13 @@
+         speech.Show(text, true);
+     }
+ 
++    // 汇报这类长内容：说清楚之后自己收起来，不用主人去点小叉。
++    private void ShowCompanionBubble(string text, double seconds)
++    {
++        ShowCompanionBubble(text);
++        if (seconds > 0) bubbleUntil = DateTime.UtcNow.AddSeconds(seconds);
++    }
++
+     private void ShowCompanionPartial(string text, long? expectedVersion = null)
+     {
+         if (!Dispatcher.CheckAccess())
+@@ -457,6 +477,13 @@
+         bubbleIsModelReply = false;
+         bubbleUntil = DateTime.MaxValue;
+         speech.Show(text, animate);
++    }
++
++    // 需要自己消失的提示（点仪表看状态这类），不占着屏幕等主人去关。
++    private void ShowCompanionNotice(string text, double seconds)
++    {
++        ShowCompanionNotice(text);
++        if (seconds > 0) bubbleUntil = DateTime.UtcNow.AddSeconds(seconds);
+     }
+ 
+     private void ClearCompanionModelReply()
+@@ -476,12 +503,14 @@
+         lastFrame = now;
+         if (companionClosed || exitAnimation)
+             return;
++        CompanionExtrasTick();
++        UpdateVitalsHud(now);
+         if (preferences.PublicInfo) brain.RefreshWeather();
+-        if (App.Args.Contains("--test-mode") && now > diagnosticAt)
++        if (TestMode && now > diagnosticAt)
+         {
+             diagnosticAt = now.AddSeconds(1);
+             var hwnd = new WindowInteropHelper(this).Handle;
+-            File.WriteAllText("test-status.json", System.Text.Json.JsonSerializer.Serialize(new { ready = companionReady, visible = IsVisible, hiddenByUser, fullscreenHidden, fullscreen = CompanionNative.IsFullscreen(), onAC = CompanionNative.OnAC, runner = brain.RunnerPid, busy = brain.Busy, status = brain.Status, hwnd = hwnd.ToInt64(), foreground = CompanionNative.GetForegroundWindow().ToInt64(), startupForeground = startupForeground.ToInt64(), style = CompanionNative.GetStyle(hwnd, -20).ToInt64(), Left, Top, Width, Height, bubble = bubbleText.Text, bubbleVisible = bubble.Visibility == Visibility.Visible, loadingVisible = loadingIndicator.Visibility == Visibility.Visible, bubbleDurationIndex = preferences.BubbleDurationIndex, bubbleRemainingSeconds = bubbleUntil == DateTime.MaxValue ? -1 : Math.Max(0, (bubbleUntil - now).TotalSeconds), action = currentAction, animationPhase, animationFrames = videoPlayer?.Frames, animationSeconds = videoPlayer?.PositionSeconds, animationInterval = preferences.AnimationIntervalSeconds, workRecognitionEnabled = false }));
++            File.WriteAllText("test-status.json", System.Text.Json.JsonSerializer.Serialize(new { ready = companionReady, visible = IsVisible, hiddenByUser, fullscreenHidden, fullscreen = CompanionNative.IsFullscreen(), onAC = CompanionNative.OnAC, runner = brain.RunnerPid, busy = brain.Busy, status = brain.Status, hwnd = hwnd.ToInt64(), foreground = CompanionNative.GetForegroundWindow().ToInt64(), startupForeground = startupForeground.ToInt64(), style = CompanionNative.GetStyle(hwnd, -20).ToInt64(), Left, Top, Width, Height, bubble = bubbleText.Text, bubbleVisible = bubble.Visibility == Visibility.Visible, loadingVisible = loadingIndicator.Visibility == Visibility.Visible, bubbleDurationIndex = preferences.BubbleDurationIndex, bubbleRemainingSeconds = bubbleUntil == DateTime.MaxValue ? -1 : Math.Max(0, (bubbleUntil - now).TotalSeconds), action = currentAction, animationPhase, animationFrames = videoPlayer?.Frames, animationSeconds = videoPlayer?.PositionSeconds, animationInterval = preferences.AnimationIntervalSeconds, workRecognitionEnabled = preferences.WorkRecognition, affection = preferences.Affection, satiety = preferences.Satiety, energy = preferences.Energy, pomodoroRunning = PomodoroRunning, pomodoroLabel = PomodoroLabel(), clipboardWatch = preferences.ClipboardWatch, foregroundProcess = CompanionWorkContext.ProcessName(CompanionNative.GetForegroundWindow()), isCoding = CompanionWorkContext.Classify(CompanionNative.GetForegroundWindow()).Coding, isWorking = CompanionWorkContext.Classify(CompanionNative.GetForegroundWindow()).Working }));
+             if (File.Exists("test-command.txt"))
+             {
+                 var command = File.ReadAllText("test-command.txt").Trim();
+@@ -528,6 +557,74 @@
+                         return;
+                     case "generate":
+                         nextSpeech = now;
++                        break;
++                    case "feed":
++                        FeedCompanion();
++                        break;
++                    case "pomodoro":
++                        StartPomodoro(preferences.PomodoroMinutes);
++                        break;
++                    case "pomodoro-stop":
++                        StopPomodoro();
++                        break;
++                    case "copy-screen":
++                    case "report-screen":
++                        _ = ReportScreenAsync();
++                        break;
++                    case "vitals":
++                        preferences.Satiety = 10;
++                        preferences.Energy = 10;
++                        SaveCompanion();
++                        break;
++                    case "affection-low":
++                        preferences.Affection = 8;
++                        SaveCompanion();
++                        break;
++                    case "aff-chat-open":
++                        GrantChatOpenAffection();
++                        break;
++                    case "aff-chat-msg":
++                        GrantChatMessageAffection();
++                        break;
++                    case "affection-high":
++                        preferences.Affection = 96;
++                        SaveCompanion();
++                        break;
++                    case "vitals-reset":
++                        preferences.Satiety = 72;
++                        preferences.Energy = 82;
++                        preferences.Affection = 55;
++                        SaveCompanion();
++                        break;
++                    case "auto-sample":
++                    {
++                        // 只在测试模式：把自播的随机分布跑 2000 次，落盘看每个动作被选中的次数，
++                        // 用来确认「106 个动作都能自己播」而不是靠肉眼等几小时。
++                        var counts = new Dictionary<string, int>();
++                        var ctx = AnimationContext();
++                        for (var i = 0; i < 2000; i++)
++                        {
++                            var picked = ChooseAutoAction(ctx);
++                            counts[picked.Id] = counts.TryGetValue(picked.Id, out var n) ? n + 1 : 1;
++                        }
++                        File.WriteAllText("auto-sample.json", System.Text.Json.JsonSerializer.Serialize(
++                            new { total = 2000, distinct = counts.Count, counts },
++                            new System.Text.Json.JsonSerializerOptions
++                            {
++                                WriteIndented = true,
++                                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
++                            }));
++                        break;
++                    }
++                    case "clip-on":
++                        preferences.ClipboardWatch = true;
++                        clipboardLast = "";
++                        clipboardNextAt = DateTime.Now;
++                        SaveCompanion();
++                        break;
++                    case "clip-off":
++                        preferences.ClipboardWatch = false;
++                        SaveCompanion();
+                         break;
+                     case "inspectable":
+                         ShowInTaskbar = true;
+@@ -569,6 +666,8 @@
+                             StartAnimationEvent(animationPolicy.Find(command[6..]));
+                         else if (command.StartsWith("action:"))
+                             PlayCompanion(command[7..]);
++                        else if (command.StartsWith("menu:"))
++                            PlayActionFromMenu(command[5..]);
+                         break;
+                 }
+             }
+@@ -646,7 +745,7 @@
+                 || !preferences.ModelEnabled || !brain.CanRunOnCurrentPower)
+                 return;
+             version = speechRequestVersion;
+-            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++            nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+             BeginModelSpeech(); // A preceding weather request may have ended its own loading indicator.
+             text = await brain.Generate(preferences.PublicInfo, preferences.ForegroundEnabled, foregroundHandle, partial =>
+             {
+@@ -705,7 +804,7 @@
+         hiddenByUser = false;
+         Show();
+         ClampCompanion();
+-        nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom));
++        nextSpeech = DateTime.UtcNow.Add(preferences.NextSpeechDelay(companionRandom, preferences.Affection, preferences.Energy));
+     }
+ 
+     private void HideCompanion()
+diff -urN a/code/BigBlueFish.Windows/Companion/CompanionWorkContext.cs b/code/BigBlueFish.Windows/Companion/CompanionWorkContext.cs
+--- /dev/null
++++ b/code/BigBlueFish.Windows/Companion/CompanionWorkContext.cs
+@@ -0,0 +1,83 @@
++using System;
++using System.Diagnostics;
++using System.Text;
++
++namespace BigBlueFish.Windows;
++
++// 判断主人现在是不是在写代码 / 办公，用来挑更贴切的动作和语气。
++// 只看进程名，不读窗口内容，不联网，纯本地。
++internal static class CompanionWorkContext
++{
++    private static readonly string[] Coding =
++    {
++        "devenv", "code", "cursor", "windsurf", "trae", "hbuilderx",
++        "rider64", "idea64", "pycharm64", "webstorm64", "clion64", "goland64",
++        "phpstorm64", "datagrip64", "rubymine64", "studio64", "androidstudio",
++        "sublime_text", "notepad++", "notepad", "zed", "nvim", "vim", "emacs", "xcode",
++        "unity", "unityhub", "godot", "blender", "rstudio", "matlab", "jupyter"
++    };
++
++    private static readonly string[] Working =
++    {
++        "winword", "excel", "powerpnt", "onenote", "mspub", "visio", "msaccess",
++        "wps", "et", "wpp", "wpsoffice", "pdf",
++        "acrobat", "acrord32", "foxitreader", "foxitpdfreader", "sumatrapdf",
++        "notion", "obsidian", "typora", "xmind", "mindmaster", "logseq",
++        "figma", "photoshop", "illustrator", "aftereffects", "premiere", "coreldrw",
++        "outlook", "thunderbird", "onenotem"
++    };
++
++    private static IntPtr cachedHandle;
++    private static DateTime cachedAt = DateTime.MinValue;
++    private static (bool Coding, bool Working) cached;
++
++    // 每 2 秒最多查一次进程，避免动画边界频繁枚举进程表。
++    internal static (bool Coding, bool Working) Classify(IntPtr handle)
++    {
++        var now = DateTime.UtcNow;
++        if (handle == cachedHandle && now - cachedAt < TimeSpan.FromSeconds(2)) return cached;
++        cachedHandle = handle;
++        cachedAt = now;
++        cached = Compute(handle);
++        return cached;
++    }
++
++    private static (bool Coding, bool Working) Compute(IntPtr handle)
++    {
++        var name = ProcessName(handle);
++        if (name.Length == 0) return (false, false);
++        if (Array.Exists(Coding, n => name.Equals(n, StringComparison.OrdinalIgnoreCase))) return (true, true);
++        if (Array.Exists(Working, n => name.Equals(n, StringComparison.OrdinalIgnoreCase))) return (false, true);
++        return (false, false);
++    }
++
++    internal static string ProcessName(IntPtr handle)
++    {
++        if (handle == IntPtr.Zero || CompanionNative.IsDesktopWindow(handle)) return "";
++        CompanionNative.GetWindowThreadProcessId(handle, out var pid);
++        if (pid == 0 || pid == Environment.ProcessId) return "";
++        try { using var process = Process.GetProcessById((int)pid); return process.ProcessName; }
++        catch { return ""; }
++    }
++
++    internal static string WindowTitle(IntPtr handle)
++    {
++        if (handle == IntPtr.Zero) return "";
++        var title = new StringBuilder(512);
++        CompanionNative.GetWindowText(handle, title, title.Capacity);
++        return title.ToString().Trim();
++    }
++
++    // 日记里用的简短描述：应用名 + 标题（标题截断，避免写进去一长串无关内容）。
++    internal static string Describe(IntPtr handle)
++    {
++        var name = ProcessName(handle);
++        if (name.Length == 0) return "";
++        var title = WindowTitle(handle);
++        foreach (var suffix in new[] { " - Google Chrome", " - Microsoft\u200b Edge", " - Visual Studio Code" })
++            if (title.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
++                title = title[..^suffix.Length];
++        if (title.Length > 40) title = title[..40] + "…";
++        return title.Length == 0 ? name : name + "｜" + title;
++    }
++}
